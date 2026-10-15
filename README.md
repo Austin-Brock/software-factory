@@ -10,6 +10,7 @@ A lightweight, autonomous software factory powered by AWS Bedrock AgentCore, wit
 | `orchestration/` | Wiring that routes tickets to agents |
 | `workspace/` | Scratch area for agent working copies |
 | `infrastructure/` | CDK app for AgentCore deployment |
+| `scripts/` | Operator scripts (e.g. invoke the deployed planner) |
 | `tests/` | pytest suite |
 
 ## Local setup
@@ -63,6 +64,16 @@ docker run --rm -p 8080:8080 \
 | `PLANNER_MAX_TOKENS` | 4096 | Max output tokens per plan |
 | `PLANNER_MAX_TICKET_CHARS` | 20000 | Max ticket length accepted by the service |
 
+## Call the deployed planner
+
+After deploying `infrastructure/` (see its README):
+
+```bash
+python -m scripts.invoke_planner "Add a dark mode toggle that persists between sessions."
+```
+
+The script finds the `software_factory_planner` runtime by name (or uses `PLANNER_RUNTIME_ARN`) and starts a fresh session per ticket.
+
 ## Tests
 
 ```bash
@@ -71,6 +82,6 @@ pytest
 
 ## Roadmap
 
-1. Planning agent running locally against Bedrock ← current
-2. Deploy to Bedrock AgentCore via CDK
-3. Linear tickets trigger the planner automatically
+1. ✅ Planning agent running locally against Bedrock
+2. ✅ Deploy to Bedrock AgentCore via CDK
+3. Linear tickets trigger the planner automatically ← next
