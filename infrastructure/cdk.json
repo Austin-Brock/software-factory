@@ -5,6 +5,9 @@
     "plannerMaxTokens": "4096",
     "plannerMaxTicketChars": "20000",
     "budgetName": "monthly-account-cap",
-    "linearTriggerLabel": "factory:plan"
+    "linearTriggerLabel": "factory:plan",
+    "linearTeamRepos": {
+      "FAC": "Austin-Brock/factory-sandbox"
+    }
   }
 }

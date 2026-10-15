@@ -155,12 +155,19 @@ def format_ticket(issue: dict) -> str:
     )
 
 
-def run_planner(ticket: str) -> dict:
+def repo_for_team(team_key: str | None) -> str | None:
+    """The repository a Linear team's tickets are planned against, if any."""
+    team_repos = json.loads(os.environ.get("TEAM_REPOS") or "{}")
+    return team_repos.get(team_key or "")
+
+
+def run_planner(ticket: str, repo: str | None = None) -> dict:
+    payload = {"ticket": ticket, **({"repo": repo} if repo else {})}
     try:
         response = _client("bedrock-agentcore").invoke_agent_runtime(
             agentRuntimeArn=os.environ["PLANNER_RUNTIME_ARN"],
             runtimeSessionId=str(uuid.uuid4()),
-            payload=json.dumps({"ticket": ticket}).encode(),
+            payload=json.dumps(payload).encode(),
             contentType="application/json",
             accept="application/json",
         )
@@ -203,7 +210,8 @@ def worker(event, context):
         logger.info("Skipping %s: %s was not added", issue["identifier"], trigger)
         return {"skipped": issue["identifier"]}
 
-    result = run_planner(format_ticket(issue))
+    repo = repo_for_team((issue.get("team") or {}).get("key"))
+    result = run_planner(format_ticket(issue), repo)
     planned = "plan" in result
     body = f"{PLAN_HEADER}\n\n{result['plan']}" if planned else error_comment(result)
     if not planned:
