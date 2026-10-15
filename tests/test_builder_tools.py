@@ -124,3 +124,27 @@ def test_time_budget_stops_edits(workspace):
     workspace.deadline = time.monotonic() - 1
     t, _ = tools(workspace)
     assert "Time budget exhausted" in t["write_file"]("src/A.ts", "a")
+
+
+LEAKED = '<analysis>Now CSS.</analysis to=functions.edit_file code<|message|>{"path":"src/index.css"}'
+
+
+@pytest.mark.parametrize("text", [LEAKED, "to=functions.write_file", "x <|call|> y", "<|channel|>final"])
+def test_leaked_tool_calls_are_detected(text):
+    assert builder_tools.has_leaked_tool_call(text)
+
+
+def test_normal_markdown_is_not_flagged():
+    assert not builder_tools.has_leaked_tool_call("## Summary\nAdded a `ThemeToggle` component <with> tests.")
+
+
+def test_finish_requires_a_clean_summary_and_real_changes(workspace):
+    finished = []
+    workspace.on_finish = lambda: finished.append(True)
+    t, _ = tools(workspace)
+    assert "not changed any files" in t["finish"]("Done")
+    t["edit_file"]("src/App.tsx", "const a = 1", "const a = 2")
+    assert "rejected" in t["finish"](LEAKED)
+    assert workspace.summary is None and not finished
+    assert t["finish"]("## Summary\nChanged a.") == "Finished."
+    assert workspace.summary == "## Summary\nChanged a." and finished == [True]

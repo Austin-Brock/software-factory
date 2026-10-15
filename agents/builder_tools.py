@@ -8,8 +8,10 @@ which (unlike this container) holds the GitHub credentials.
 
 import json
 import os
+import re
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,8 +32,17 @@ CHECKS = ("install", "lint", "typecheck", "test", "build")
 SAFE_ENV_KEYS = ("PATH", "LANG", "LC_ALL", "TZ")
 
 
+# gpt-oss sometimes writes a tool call out as text in its internal "harmony"
+# format instead of making a real call. Such text is never a valid summary.
+HARMONY_MARKERS = re.compile(r"<\|(?:message|call|channel|start|end|constrain)\|>|\bto=functions\.|</?analysis\b")
+
+
 class BuildLimitError(RuntimeError):
     pass
+
+
+def has_leaked_tool_call(text: str) -> bool:
+    return bool(HARMONY_MARKERS.search(text or ""))
 
 
 def forbidden_reason(path: str) -> str | None:
@@ -50,6 +61,8 @@ class Workspace:
     originals: dict[str, bytes | None] = field(default_factory=dict)
     check_runs: int = 0
     check_results: dict[str, dict] = field(default_factory=dict)
+    summary: str | None = None
+    on_finish: Callable[[], None] | None = None
 
     def remember(self, rel: str, target: Path) -> None:
         if rel not in self.originals:
@@ -218,4 +231,21 @@ def make_tools(workspace: Workspace, budget: repo_tools.ToolBudget) -> list:
         status = {True: "PASSED", False: "FAILED", None: "SKIPPED"}[result["passed"]]
         return f"{name}: {status}\n{result['output']}"
 
-    return [list_files, read_file, search, write_file, edit_file, delete_file, run_check]
+    @tool
+    def finish(summary: str) -> str:
+        """Declare the work complete. Call this exactly once, when you are done.
+
+        Args:
+            summary: Markdown summary of what changed and why, how it was
+                tested, and anything a reviewer should look at closely.
+        """
+        if has_leaked_tool_call(summary) or not summary.strip():
+            return "Summary rejected: write a plain markdown summary of your changes."
+        if not workspace.changes():
+            return "You have not changed any files yet. Implement the plan first."
+        workspace.summary = summary.strip()
+        if workspace.on_finish:
+            workspace.on_finish()
+        return "Finished."
+
+    return [list_files, read_file, search, write_file, edit_file, delete_file, run_check, finish]

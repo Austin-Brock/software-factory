@@ -277,6 +277,9 @@ def branch_name(identifier: str, title: str) -> str:
     return f"factory/{identifier.lower()}-{slug}" if slug else f"factory/{identifier.lower()}"
 
 
+LEAKED_TOOL_TEXT = re.compile(r"<\|(?:message|call|channel|start|end|constrain)\|>|\bto=functions\.|</?analysis\b")
+
+
 def pr_body(event: dict, result: dict) -> str:
     checks = result.get("checks") or {}
     rows = "\n".join(
@@ -311,7 +314,10 @@ def build_worker(event, context):
         linear.comment(issue_id, error_comment(result, "build this"))
         return {"failed": identifier}
 
-    if problems := rules.change_problems(result["changes"]):
+    problems = rules.change_problems(result["changes"])
+    if not (result.get("summary") or "").strip() or LEAKED_TOOL_TEXT.search(result.get("summary") or ""):
+        problems.append("The builder did not finish cleanly (no valid summary)")
+    if problems:
         logger.error("Rejected change for %s: %s", identifier, problems)
         linear.comment(
             issue_id,

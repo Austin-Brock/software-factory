@@ -42,8 +42,8 @@ def invoke(payload: dict):
         return error("Builder exceeded its tool budget", "Split the ticket into smaller pieces.", 422)
     except MaxTokensReachedException:
         return error("Builder exceeded the output token cap", "Raise PLANNER_MAX_TOKENS.", 422)
-    except planner.EmptyPlanError:
-        return error("Builder returned no summary", "Relabel the ticket to try again.", 502)
+    except (builder.IncompleteBuildError, planner.EmptyPlanError):
+        return error("Builder stopped before finishing", "Relabel the ticket to try again.", 502)
     except (repo_tools.RepoError, tarfile.TarError, OSError) as exc:
         return error("Could not read the repository", str(exc) or type(exc).__name__, 502)
     except ModelThrottledException:

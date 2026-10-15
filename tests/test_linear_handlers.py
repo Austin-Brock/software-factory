@@ -409,3 +409,11 @@ def test_github_failure_is_reported(aws, monkeypatch, github):
 )
 def test_branch_names_are_safe(title, branch):
     assert handlers.branch_name("FAC-1", title) == branch
+
+
+def test_leaked_tool_text_in_summary_blocks_the_pr(aws, monkeypatch, github):
+    leaked = {**BUILD_RESULT, "summary": "<analysis>Now CSS.</analysis to=functions.edit_file code<|message|>{}"}
+    result, linear = build(aws, monkeypatch, leaked)
+    assert result == {"rejected": "FAC-1"}
+    assert github == []
+    assert "did not finish cleanly" in linear.comments[0]
