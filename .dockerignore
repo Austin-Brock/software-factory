@@ -10,7 +10,6 @@ __pycache__/
 **/__pycache__/
 *.pyc
 tests/
-workspace/
 infrastructure/
 cdk.out/
 README.md
