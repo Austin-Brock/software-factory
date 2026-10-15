@@ -7,6 +7,8 @@ from aws_cdk import aws_ecr_assets as ecr_assets
 from aws_cdk import aws_iam as iam
 from constructs import Construct
 
+from stacks.linear_integration import LinearIntegration
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Cross-region inference profile IDs carry a geography prefix.
@@ -37,6 +39,7 @@ class PlannerStack(Stack):
         max_ticket_chars: str,
         budget_name: str,
         budget_alert_email: str,
+        linear_trigger_label: str,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -76,10 +79,20 @@ class PlannerStack(Stack):
             )
         )
 
-        self._add_budget_kill_switch(budget_name, budget_alert_email)
+        self.linear = LinearIntegration(
+            self, "Linear", runtime=self.runtime, trigger_label=linear_trigger_label
+        )
 
-    def _add_budget_kill_switch(self, budget_name: str, alert_email: str) -> None:
-        """At 100% of the monthly budget, cut the planner off from Bedrock."""
+        self._add_budget_kill_switch(
+            budget_name,
+            budget_alert_email,
+            roles=[self.runtime.role, self.linear.worker.role],
+        )
+
+    def _add_budget_kill_switch(
+        self, budget_name: str, alert_email: str, roles: list[iam.IRole]
+    ) -> None:
+        """At 100% of the monthly budget, cut agents off from Bedrock and AgentCore."""
         deny_bedrock = iam.ManagedPolicy(
             self,
             "BudgetKillSwitchPolicy",
@@ -87,13 +100,13 @@ class PlannerStack(Stack):
             statements=[
                 iam.PolicyStatement(
                     effect=iam.Effect.DENY,
-                    actions=["bedrock:*"],
+                    actions=["bedrock:*", "bedrock-agentcore:InvokeAgentRuntime"],
                     resources=["*"],
                 )
             ],
         )
 
-        # Budgets may attach exactly this policy to exactly this role.
+        # Budgets may attach exactly this policy to exactly these roles.
         budgets_role = iam.Role(
             self,
             "BudgetActionRole",
@@ -106,7 +119,7 @@ class PlannerStack(Stack):
         budgets_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
-                resources=[self.runtime.role.role_arn],
+                resources=[role.role_arn for role in roles],
                 conditions={
                     "ArnEquals": {"iam:PolicyARN": deny_bedrock.managed_policy_arn}
                 },
@@ -127,7 +140,7 @@ class PlannerStack(Stack):
             definition=budgets.CfnBudgetsAction.DefinitionProperty(
                 iam_action_definition=budgets.CfnBudgetsAction.IamActionDefinitionProperty(
                     policy_arn=deny_bedrock.managed_policy_arn,
-                    roles=[self.runtime.role.role_name],
+                    roles=[role.role_name for role in roles],
                 )
             ),
             subscribers=[

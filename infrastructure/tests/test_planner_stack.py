@@ -15,6 +15,7 @@ def synth(model_id="openai.gpt-oss-120b-1:0") -> Template:
         max_ticket_chars="20000",
         budget_name="monthly-account-cap",
         budget_alert_email="alerts@example.com",
+        linear_trigger_label="factory:plan",
         env=cdk.Environment(account="111111111111", region="us-east-1"),
     )
     return Template.from_stack(stack)
@@ -111,7 +112,11 @@ def test_budget_kill_switch_denies_bedrock_at_100_percent(template):
         {
             "PolicyDocument": {
                 "Statement": [
-                    {"Effect": "Deny", "Action": "bedrock:*", "Resource": "*"}
+                    {
+                        "Effect": "Deny",
+                        "Action": ["bedrock:*", "bedrock-agentcore:InvokeAgentRuntime"],
+                        "Resource": "*",
+                    }
                 ]
             }
         },
@@ -126,7 +131,10 @@ def test_budget_kill_switch_denies_bedrock_at_100_percent(template):
             "ActionThreshold": {"Type": "PERCENTAGE", "Value": 100},
             "Definition": {
                 "IamActionDefinition": {
-                    "Roles": [{"Ref": Match.string_like_regexp("PlannerRuntimeExecutionRole")}]
+                    "Roles": [
+                        {"Ref": Match.string_like_regexp("PlannerRuntimeExecutionRole")},
+                        {"Ref": Match.string_like_regexp("LinearWorkerServiceRole")},
+                    ]
                 }
             },
             "Subscribers": [{"Type": "EMAIL", "Address": "alerts@example.com"}],
@@ -144,12 +152,10 @@ def test_budgets_role_can_only_attach_kill_switch_to_runtime_role(template):
                     {
                         "Effect": "Allow",
                         "Action": ["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
-                        "Resource": {
-                            "Fn::GetAtt": [
-                                Match.string_like_regexp("PlannerRuntimeExecutionRole"),
-                                "Arn",
-                            ]
-                        },
+                        "Resource": [
+                            {"Fn::GetAtt": [Match.string_like_regexp("PlannerRuntimeExecutionRole"), "Arn"]},
+                            {"Fn::GetAtt": [Match.string_like_regexp("LinearWorkerServiceRole"), "Arn"]},
+                        ],
                         "Condition": {
                             "ArnEquals": {
                                 "iam:PolicyARN": {
@@ -159,6 +165,62 @@ def test_budgets_role_can_only_attach_kill_switch_to_runtime_role(template):
                         },
                     }
                 ]
+            },
+        },
+    )
+
+
+def test_webhook_receiver_is_public_and_fast(template):
+    template.has_resource_properties("AWS::Lambda::Url", {"AuthType": "NONE"})
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {"Handler": "linear.handlers.receiver", "Timeout": 5, "Architectures": ["arm64"]},
+    )
+
+
+def test_worker_never_retries(template):
+    template.has_resource_properties(
+        "AWS::Lambda::EventInvokeConfig", {"MaximumRetryAttempts": 0}
+    )
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
+            "Handler": "linear.handlers.worker",
+            "Environment": {"Variables": Match.object_like({"TRIGGER_LABEL": "factory:plan"})},
+        },
+    )
+
+
+def test_logs_expire_after_a_week(template):
+    logs = template.find_resources("AWS::Logs::LogGroup")
+    assert logs and all(r["Properties"]["RetentionInDays"] == 7 for r in logs.values())
+
+
+def test_dedupe_table_is_on_demand_with_ttl(template):
+    template.has_resource_properties(
+        "AWS::DynamoDB::Table",
+        {
+            "BillingMode": "PAY_PER_REQUEST",
+            "TimeToLiveSpecification": {"AttributeName": "expiresAt", "Enabled": True},
+        },
+    )
+
+
+def test_worker_reads_only_the_api_key(template):
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        {
+            "Roles": [{"Ref": Match.string_like_regexp("LinearWorkerServiceRole")}],
+            "PolicyDocument": {
+                "Statement": Match.array_with(
+                    [
+                        {
+                            "Effect": "Allow",
+                            "Action": "ssm:GetParameter",
+                            "Resource": "arn:aws:ssm:us-east-1:111111111111:parameter/software-factory/linear/api-key",
+                        }
+                    ]
+                )
             },
         },
     )

@@ -25,6 +25,7 @@ PlannerStack(
     max_ticket_chars=app.node.get_context("plannerMaxTicketChars"),
     budget_name=app.node.get_context("budgetName"),
     budget_alert_email=budget_alert_email,
+    linear_trigger_label=app.node.get_context("linearTriggerLabel"),
     env=cdk.Environment(region="us-east-1"),
 )
 
