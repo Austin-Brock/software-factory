@@ -9,8 +9,6 @@ Label a ticket `factory:plan`. About 25 seconds later an implementation plan is 
 - comes from a GitHub App bot
 - can't be merged until a person approves it
 
-> 🎥 **Demo video:** _coming soon_
-
 **See it in action** (real PRs opened by the factory on its sandbox repo):
 - [factory-sandbox#2](https://github.com/Austin-Brock/factory-sandbox/pull/2): *"Add a dark mode toggle that persists between sessions"* (3 files, new tests, all checks green)
 - [factory-sandbox#3](https://github.com/Austin-Brock/factory-sandbox/pull/3): *"Show the number of completed to-dos"* (ticket to PR in 59 seconds)
