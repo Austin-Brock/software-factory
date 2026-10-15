@@ -28,6 +28,25 @@ aws sts get-caller-identity   # confirm AWS credentials
 python -m agents.planner
 ```
 
+## Run the planner as a service (AgentCore contract)
+
+```bash
+python -m agents.planner_service   # listens on :8080
+curl localhost:8080/ping
+curl -X POST localhost:8080/invocations \
+  -H 'content-type: application/json' \
+  -d '{"ticket": "Add a dark mode toggle that persists between sessions."}'
+```
+
+Each request builds a fresh agent, so tickets never share conversation history.
+
+## Cost limits
+
+| Setting (`.env`) | Default | Purpose |
+| --- | --- | --- |
+| `PLANNER_MAX_TOKENS` | 4096 | Max output tokens per plan |
+| `PLANNER_MAX_TICKET_CHARS` | 20000 | Max ticket length accepted by the service |
+
 ## Tests
 
 ```bash

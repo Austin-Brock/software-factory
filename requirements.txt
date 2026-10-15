@@ -1,6 +1,7 @@
 annotated-types==0.8.0
 anyio==4.15.1
 attrs==26.1.0
+bedrock-agentcore==1.24.1
 boto3==1.43.114
 botocore==1.43.114
 certifi==2026.7.22
@@ -50,4 +51,5 @@ typing_extensions==4.16.0
 urllib3==2.8.0
 uvicorn==0.54.0
 watchdog==6.0.0
+websockets==17.2
 wrapt==2.5.1

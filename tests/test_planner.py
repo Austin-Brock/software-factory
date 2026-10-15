@@ -26,3 +26,12 @@ def test_build_planner_uses_env_config(monkeypatch):
     agent = planner.build_planner()
     assert agent.model.config["model_id"] == "test-model"
     assert agent.system_prompt == planner.SYSTEM_PROMPT
+
+
+def test_build_planner_caps_output_tokens(monkeypatch):
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "test-model")
+    monkeypatch.delenv("PLANNER_MAX_TOKENS", raising=False)
+    assert planner.build_planner().model.config["max_tokens"] == planner.DEFAULT_MAX_TOKENS
+
+    monkeypatch.setenv("PLANNER_MAX_TOKENS", "512")
+    assert planner.build_planner().model.config["max_tokens"] == 512
