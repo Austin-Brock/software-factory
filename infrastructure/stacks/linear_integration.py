@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
+from aws_cdk import BundlingOptions, CfnOutput, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_bedrockagentcore as agentcore
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
@@ -9,12 +9,13 @@ from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from constructs import Construct
 
-INTEGRATIONS_DIR = Path(__file__).resolve().parents[2] / "integrations"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # SecureString parameters can't be created by CloudFormation; they are
 # stored once with the AWS CLI (see infrastructure/README.md).
 API_KEY_PARAM = "/software-factory/linear/api-key"
 WEBHOOK_SECRET_PARAM = "/software-factory/linear/webhook-secret"
+GITHUB_APP_KEY_PARAM = "/software-factory/github/app-private-key"
 
 
 class LinearIntegration(Construct):
@@ -26,8 +27,11 @@ class LinearIntegration(Construct):
         construct_id: str,
         *,
         runtime: agentcore.Runtime,
+        builder: agentcore.Runtime,
         trigger_label: str,
         team_repos: dict[str, str],
+        github_app_id: str,
+        github_installation_id: str,
     ) -> None:
         super().__init__(scope, construct_id)
         stack = Stack.of(self)
@@ -41,7 +45,22 @@ class LinearIntegration(Construct):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
-        code = lambda_.Code.from_asset(str(INTEGRATIONS_DIR), exclude=["**/__pycache__"])
+        # The bundle is integrations/ plus its pinned dependencies (PyJWT for
+        # GitHub App auth), built for the Lambda runtime's architecture.
+        code = lambda_.Code.from_asset(
+            str(REPO_ROOT),
+            exclude=["*", "!integrations", "!integrations/**", "**/__pycache__"],
+            bundling=BundlingOptions(
+                image=lambda_.Runtime.PYTHON_3_13.bundling_image,
+                platform="linux/arm64",
+                command=[
+                    "bash",
+                    "-c",
+                    "pip install --no-cache-dir -r integrations/requirements.txt -t /asset-output"
+                    " && cp -r integrations /asset-output/",
+                ],
+            ),
+        )
 
         def function(name: str, handler: str, timeout: Duration, env: dict) -> lambda_.Function:
             return lambda_.Function(
@@ -62,9 +81,25 @@ class LinearIntegration(Construct):
                 ),
             )
 
+        # Builds take up to 12 minutes; Lambda's maximum is 15.
+        self.build_worker = function(
+            "BuildWorker",
+            "integrations.linear.handlers.build_worker",
+            Duration.minutes(15),
+            {
+                "LINEAR_API_KEY_PARAM": API_KEY_PARAM,
+                "BUILDER_RUNTIME_ARN": builder.agent_runtime_arn,
+                "GITHUB_APP_ID": github_app_id,
+                "GITHUB_INSTALLATION_ID": github_installation_id,
+                "GITHUB_APP_KEY_PARAM": GITHUB_APP_KEY_PARAM,
+            },
+        )
+        # A retry would start a second billed build and open a duplicate PR.
+        self.build_worker.configure_async_invoke(retry_attempts=0, max_event_age=Duration.hours(1))
+
         self.worker = function(
             "Worker",
-            "linear.handlers.worker",
+            "integrations.linear.handlers.worker",
             # Repo exploration can take several minutes on large tickets.
             Duration.minutes(10),
             {
@@ -72,6 +107,7 @@ class LinearIntegration(Construct):
                 "PLANNER_RUNTIME_ARN": runtime.agent_runtime_arn,
                 "TRIGGER_LABEL": trigger_label,
                 "TEAM_REPOS": json.dumps(team_repos, sort_keys=True),
+                "BUILD_FUNCTION": self.build_worker.function_name,
             },
         )
         # A retry would start a second billed planner run and a duplicate comment.
@@ -79,7 +115,7 @@ class LinearIntegration(Construct):
 
         self.receiver = function(
             "Receiver",
-            "linear.handlers.receiver",
+            "integrations.linear.handlers.receiver",
             # Linear gives up after 5 seconds.
             Duration.seconds(5),
             {
@@ -103,6 +139,11 @@ class LinearIntegration(Construct):
 
         read_parameter(self.worker, API_KEY_PARAM)
         runtime.grant_invoke_runtime(self.worker)
+        self.build_worker.grant_invoke(self.worker)
+
+        read_parameter(self.build_worker, API_KEY_PARAM)
+        read_parameter(self.build_worker, GITHUB_APP_KEY_PARAM)
+        builder.grant_invoke_runtime(self.build_worker)
 
         # Public URL for Linear; every request is checked against the signing secret.
         url = self.receiver.add_function_url(auth_type=lambda_.FunctionUrlAuthType.NONE)

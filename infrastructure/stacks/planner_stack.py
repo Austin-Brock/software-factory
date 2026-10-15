@@ -41,21 +41,79 @@ class PlannerStack(Stack):
         budget_alert_email: str,
         linear_trigger_label: str,
         linear_team_repos: dict[str, str],
+        github_app_id: str,
+        github_installation_id: str,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        artifact = agentcore.AgentRuntimeArtifact.from_asset(
-            str(REPO_ROOT),
-            platform=ecr_assets.Platform.LINUX_ARM64,
+        environment = {
+            "BEDROCK_MODEL_ID": model_id,
+            "PLANNER_MAX_TOKENS": max_tokens,
+            "PLANNER_MAX_TICKET_CHARS": max_ticket_chars,
+            # Only repos mapped to a Linear team may be downloaded.
+            "PLANNER_ALLOWED_REPOS": ",".join(sorted(set(linear_team_repos.values()))),
+        }
+        self.runtime = self._agent_runtime(
+            "PlannerRuntime",
+            "software_factory_planner",
+            "Turns tickets into implementation plans",
+            "Dockerfile",
+            model_id,
+            environment,
+        )
+        # The builder runs repo code (npm), so it gets no GitHub credentials;
+        # the build worker commits its changes.
+        self.builder = self._agent_runtime(
+            "BuilderRuntime",
+            "software_factory_builder",
+            "Implements plans and runs the repo's checks",
+            "Dockerfile.builder",
+            model_id,
+            environment,
         )
 
-        self.runtime = agentcore.Runtime(
+        self.linear = LinearIntegration(
             self,
-            "PlannerRuntime",
-            runtime_name="software_factory_planner",
-            description="Turns tickets into implementation plans",
-            agent_runtime_artifact=artifact,
+            "Linear",
+            runtime=self.runtime,
+            builder=self.builder,
+            trigger_label=linear_trigger_label,
+            team_repos=linear_team_repos,
+            github_app_id=github_app_id,
+            github_installation_id=github_installation_id,
+        )
+
+        self._add_budget_kill_switch(
+            budget_name,
+            budget_alert_email,
+            roles=[
+                self.runtime.role,
+                self.builder.role,
+                self.linear.worker.role,
+                self.linear.build_worker.role,
+            ],
+        )
+
+    def _agent_runtime(
+        self,
+        construct_id: str,
+        name: str,
+        description: str,
+        dockerfile: str,
+        model_id: str,
+        environment: dict[str, str],
+    ) -> agentcore.Runtime:
+        runtime = agentcore.Runtime(
+            self,
+            construct_id,
+            runtime_name=name,
+            description=description,
+            agent_runtime_artifact=agentcore.AgentRuntimeArtifact.from_asset(
+                str(REPO_ROOT),
+                file=dockerfile,
+                platform=ecr_assets.Platform.LINUX_ARM64,
+            ),
             # Public network avoids a VPC and its always-on NAT gateway cost.
             network_configuration=agentcore.RuntimeNetworkConfiguration.using_public_network(),
             # Short limits so forgotten sessions stop accruing charges.
@@ -63,38 +121,15 @@ class PlannerStack(Stack):
                 idle_runtime_session_timeout=Duration.minutes(5),
                 max_lifetime=Duration.hours(1),
             ),
-            environment_variables={
-                "BEDROCK_MODEL_ID": model_id,
-                "PLANNER_MAX_TOKENS": max_tokens,
-                "PLANNER_MAX_TICKET_CHARS": max_ticket_chars,
-                # Only repos mapped to a Linear team may be downloaded.
-                "PLANNER_ALLOWED_REPOS": ",".join(sorted(set(linear_team_repos.values()))),
-            },
+            environment_variables=environment,
         )
-
-        self.runtime.add_to_role_policy(
+        runtime.add_to_role_policy(
             iam.PolicyStatement(
-                actions=[
-                    "bedrock:InvokeModel",
-                    "bedrock:InvokeModelWithResponseStream",
-                ],
+                actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
                 resources=model_resource_arns(self, model_id),
             )
         )
-
-        self.linear = LinearIntegration(
-            self,
-            "Linear",
-            runtime=self.runtime,
-            trigger_label=linear_trigger_label,
-            team_repos=linear_team_repos,
-        )
-
-        self._add_budget_kill_switch(
-            budget_name,
-            budget_alert_email,
-            roles=[self.runtime.role, self.linear.worker.role],
-        )
+        return runtime
 
     def _add_budget_kill_switch(
         self, budget_name: str, alert_email: str, roles: list[iam.IRole]
