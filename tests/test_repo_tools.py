@@ -80,6 +80,24 @@ def test_call_budget_stops_exploration(repo):
     assert "budget exhausted" in list_files("")
 
 
+def test_ignoring_the_budget_triggers_hard_stop(repo):
+    cancelled = []
+    budget = repo_tools.ToolBudget(max_calls=1, grace_calls=2, hard_stop=lambda: cancelled.append(True))
+    list_files, *_ = repo_tools.make_tools(repo, budget)
+    for _ in range(3):
+        list_files("")
+    assert not budget.stopped and not cancelled
+    list_files("")
+    assert budget.stopped and cancelled
+
+
+def test_list_and_search_output_counts_toward_byte_budget(repo):
+    list_files, _, search, budget = tools(repo)
+    listing = list_files("")
+    found = search("accent")
+    assert budget.bytes_read == len(listing) + len(found)
+
+
 def test_byte_budget_stops_exploration(repo):
     _, read_file, _, _ = tools(repo, max_bytes=1_000)
     read_file("big.txt")
@@ -93,6 +111,14 @@ def test_archive_with_link_outside_tree_is_rejected(tmp_path):
     data = make_tarball({"a.txt": b"a"}, extra_members=[link])
     with pytest.raises(tarfile.TarError):
         repo_tools.extract(data, tmp_path)
+
+
+def test_snapshot_defaults_to_repo_default_branch(monkeypatch):
+    seen = []
+    monkeypatch.setattr(repo_tools, "_download", lambda repo, ref: seen.append(ref) or make_tarball({"a": b"a"}))
+    with repo_tools.snapshot("Austin-Brock/factory-sandbox"):
+        pass
+    assert seen == ["HEAD"]
 
 
 def test_invalid_repo_names_are_rejected():
@@ -116,6 +142,9 @@ def test_plan_ticket_with_repo_appends_files_examined(monkeypatch, tmp_path):
     class FakeAgent:
         def __init__(self, tools):
             self.tools = tools
+
+        def cancel(self):
+            pass
 
         def __call__(self, ticket):
             self.tools[1]("src/App.tsx")  # read_file

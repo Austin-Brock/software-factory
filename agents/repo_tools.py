@@ -6,10 +6,12 @@ cap how much a single plan can read, so a confused model can't loop forever.
 """
 
 import io
+import os
 import re
 import tarfile
 import tempfile
 import urllib.request
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,14 +36,29 @@ class RepoError(RuntimeError):
 class ToolBudget:
     max_calls: int = 25
     max_bytes: int = 200_000
+    # Calls tolerated after the budget is spent before the run is cancelled.
+    grace_calls: int = 5
     calls: int = 0
     bytes_read: int = 0
     files_read: list[str] = field(default_factory=list)
+    hard_stop: Callable[[], None] | None = None
+    stopped: bool = False
+
+    def charge(self, output: str) -> str:
+        """Count tool output toward the byte budget and pass it through."""
+        self.bytes_read += len(output)
+        return output
 
     def spend(self) -> str | None:
         """Count one tool call; return a stop message once the budget is used up."""
         self.calls += 1
-        if self.calls > self.max_calls or self.bytes_read >= self.max_bytes:
+        exhausted = self.calls > self.max_calls or self.bytes_read >= self.max_bytes
+        if exhausted and self.calls > self.max_calls + self.grace_calls:
+            # The model ignored the stop message; cancel instead of looping.
+            self.stopped = True
+            if self.hard_stop:
+                self.hard_stop()
+        if exhausted:
             return "Tool budget exhausted. Stop exploring and write the plan now."
         return None
 
@@ -72,7 +89,8 @@ def extract(data: bytes, destination: Path) -> Path:
 
 
 @contextmanager
-def snapshot(repo: str, ref: str = "main"):
+def snapshot(repo: str, ref: str = "HEAD"):
+    """Download the repo at ref (HEAD = its default branch) into a temp dir."""
     if not REPO_PATTERN.match(repo):
         raise RepoError(f"Invalid repository name {repo!r}")
     data = _download(repo, ref)
@@ -89,9 +107,11 @@ def _resolve(root: Path, path: str) -> Path | None:
 
 
 def _visible_files(base: Path):
-    for path in sorted(base.rglob("*")):
-        if path.is_file() and not SKIPPED_DIRS.intersection(path.relative_to(base).parts):
-            yield path
+    for directory, dirnames, filenames in os.walk(base):
+        # Prune in place so os.walk never descends into dependency/build folders.
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIPPED_DIRS)
+        for name in sorted(filenames):
+            yield Path(directory) / name
 
 
 def make_tools(root: Path, budget: ToolBudget) -> list:
@@ -116,7 +136,7 @@ def make_tools(root: Path, budget: ToolBudget) -> list:
         listing = "\n".join(files[:MAX_LISTED])
         if len(files) > MAX_LISTED:
             listing += f"\n… {len(files) - MAX_LISTED} more; list a subdirectory"
-        return listing or "(empty)"
+        return budget.charge(listing or "(empty)")
 
     @tool
     def read_file(path: str) -> str:
@@ -167,7 +187,7 @@ def make_tools(root: Path, budget: ToolBudget) -> list:
                 if needle in line.casefold():
                     matches.append(f"{rel(file)}:{number}: {line.strip()[:200]}")
                     if len(matches) >= MAX_MATCHES:
-                        return "\n".join(matches) + "\n… more matches; narrow the search"
-        return "\n".join(matches) or "No matches"
+                        return budget.charge("\n".join(matches) + "\n… more matches; narrow the search")
+        return budget.charge("\n".join(matches) or "No matches")
 
     return [list_files, read_file, search]

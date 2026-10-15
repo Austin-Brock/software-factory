@@ -188,6 +188,7 @@ def test_worker_never_retries(template):
         "AWS::Lambda::Function",
         {
             "Handler": "linear.handlers.worker",
+            "Timeout": 600,
             "Environment": {
                 "Variables": Match.object_like(
                     {

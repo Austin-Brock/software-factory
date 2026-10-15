@@ -64,6 +64,16 @@ def test_repo_download_failure_returns_502(client, monkeypatch):
     assert response.json()["details"] == "too large"
 
 
+def test_over_budget_returns_422(client, monkeypatch):
+    def plan_ticket(ticket, repo=None):
+        raise planner.OverBudgetError("looped")
+
+    monkeypatch.setattr(planner, "plan_ticket", plan_ticket)
+    response = client.post("/invocations", json={"ticket": "x"})
+    assert response.status_code == 422
+    assert response.json()["error"] == "Planner exceeded its exploration budget"
+
+
 def test_empty_plan_returns_clear_error(client, monkeypatch):
     def plan_ticket(ticket, repo=None):
         raise planner.EmptyPlanError("empty")
@@ -72,6 +82,19 @@ def test_empty_plan_returns_clear_error(client, monkeypatch):
     response = client.post("/invocations", json={"ticket": "x"})
     assert response.status_code == 502
     assert response.json()["error"] == "Planner returned an empty plan"
+
+
+def test_corrupt_archive_returns_502(client, monkeypatch):
+    import tarfile
+
+    def plan_ticket(ticket, repo=None):
+        raise tarfile.ReadError("not a gzip file")
+
+    monkeypatch.setattr(planner_service, "ALLOWED_REPOS", {"a/b"})
+    monkeypatch.setattr(planner, "plan_ticket", plan_ticket)
+    response = client.post("/invocations", json={"ticket": "x", "repo": "a/b"})
+    assert response.status_code == 502
+    assert response.json()["error"] == "Could not read the repository"
 
 
 def test_ticket_whitespace_is_trimmed(client, fake_plan):

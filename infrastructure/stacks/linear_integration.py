@@ -65,7 +65,8 @@ class LinearIntegration(Construct):
         self.worker = function(
             "Worker",
             "linear.handlers.worker",
-            Duration.minutes(5),
+            # Repo exploration can take several minutes on large tickets.
+            Duration.minutes(10),
             {
                 "LINEAR_API_KEY_PARAM": API_KEY_PARAM,
                 "PLANNER_RUNTIME_ARN": runtime.agent_runtime_arn,

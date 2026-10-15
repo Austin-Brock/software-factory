@@ -69,3 +69,11 @@ def test_persistently_empty_output_raises():
     agent = ScriptedAgent([""] * (planner.MAX_NUDGES + 1))
     with pytest.raises(planner.EmptyPlanError):
         planner.run_until_text(agent, "ticket")
+
+
+def test_hard_stopped_run_raises_over_budget():
+    from agents import repo_tools
+
+    budget = repo_tools.ToolBudget(stopped=True)
+    with pytest.raises(planner.OverBudgetError):
+        planner.run_until_text(ScriptedAgent([""]), "ticket", budget)

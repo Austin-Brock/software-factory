@@ -284,3 +284,9 @@ def test_worker_never_posts_blank_plan(aws, monkeypatch):
     result, linear = worker_with(aws, monkeypatch)
     assert result == {"failed": "FAC-1"}
     assert "empty plan" in linear.comments[0]
+
+
+@pytest.mark.parametrize("raw", ["not json", '"FAC=a/b"', '{"FAC": 42}'])
+def test_malformed_team_repos_falls_back_to_no_repo(monkeypatch, raw):
+    monkeypatch.setenv("TEAM_REPOS", raw)
+    assert handlers.repo_for_team("FAC") is None

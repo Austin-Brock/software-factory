@@ -4,7 +4,9 @@ AgentCore calls POST /invocations with a JSON payload and polls GET /ping
 for health. Run locally with `python -m agents.planner_service` (port 8080).
 """
 
+import logging
 import os
+import tarfile
 from typing import Annotated
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
@@ -23,6 +25,10 @@ planner.max_tokens()
 ALLOWED_REPOS = {
     repo.strip() for repo in os.environ.get("PLANNER_ALLOWED_REPOS", "").split(",") if repo.strip()
 }
+if not ALLOWED_REPOS:
+    logging.getLogger(__name__).warning(
+        "PLANNER_ALLOWED_REPOS is empty; requests that name a repo will be rejected"
+    )
 
 app = BedrockAgentCoreApp()
 
@@ -69,9 +75,15 @@ def invoke(payload: dict):
             "Raise PLANNER_MAX_TOKENS or split the ticket.",
             422,
         )
+    except planner.OverBudgetError:
+        return error(
+            "Planner exceeded its exploration budget",
+            "Narrow the ticket or raise the tool budget.",
+            422,
+        )
     except planner.EmptyPlanError:
         return error("Planner returned an empty plan", "Relabel the ticket to try again.", 502)
-    except (repo_tools.RepoError, OSError) as exc:
+    except (repo_tools.RepoError, tarfile.TarError, OSError) as exc:
         return error("Could not read the repository", str(exc) or type(exc).__name__, 502)
     except ModelThrottledException:
         return error("Bedrock is busy", "Retry later.", 429)

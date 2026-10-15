@@ -50,6 +50,10 @@ class EmptyPlanError(RuntimeError):
     pass
 
 
+class OverBudgetError(RuntimeError):
+    pass
+
+
 def env_positive_int(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -78,12 +82,18 @@ def build_planner(stream_to_stdout: bool = True, tools: list | None = None) -> A
     return Agent(model=model, system_prompt=prompt, tools=tools or [], **kwargs)
 
 
-def run_until_text(agent: Agent, ticket: str) -> str:
-    text = str(agent(ticket)).strip()
+def run_until_text(agent: Agent, ticket: str, budget: "repo_tools.ToolBudget | None" = None) -> str:
+    def ask(prompt: str) -> str:
+        text = str(agent(prompt)).strip()
+        if budget and budget.stopped:
+            raise OverBudgetError(f"Planner kept exploring after {budget.calls} tool calls")
+        return text
+
+    text = ask(ticket)
     for _ in range(MAX_NUDGES):
         if text:
             return text
-        text = str(agent(NUDGE)).strip()
+        text = ask(NUDGE)
     if not text:
         raise EmptyPlanError(f"Model returned no plan after {MAX_NUDGES} nudges")
     return text
@@ -106,8 +116,9 @@ def plan_ticket(ticket: str, repo: str | None = None) -> str:
         return run_until_text(build_planner(stream_to_stdout=False), ticket)
     with repo_tools.snapshot(repo) as root:
         budget = repo_tools.ToolBudget()
-        tools = repo_tools.make_tools(root, budget)
-        plan = run_until_text(build_planner(stream_to_stdout=False, tools=tools), ticket)
+        agent = build_planner(stream_to_stdout=False, tools=repo_tools.make_tools(root, budget))
+        budget.hard_stop = agent.cancel
+        plan = run_until_text(agent, ticket, budget)
     return plan + files_examined_footer(budget.files_read)
 
 
