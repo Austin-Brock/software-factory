@@ -3,7 +3,7 @@ from botocore.exceptions import ClientError
 from starlette.testclient import TestClient
 from strands.types.exceptions import MaxTokensReachedException, ModelThrottledException
 
-from agents import planner, planner_service
+from agents import planner, planner_service, repo_tools
 
 
 @pytest.fixture
@@ -15,8 +15,8 @@ def client():
 def fake_plan(monkeypatch):
     calls = []
 
-    def plan_ticket(ticket):
-        calls.append(ticket)
+    def plan_ticket(ticket, repo=None):
+        calls.append(ticket if repo is None else (ticket, repo))
         return f"plan for: {ticket}"
 
     monkeypatch.setattr(planner, "plan_ticket", plan_ticket)
@@ -34,6 +34,67 @@ def test_invocation_returns_plan(client, fake_plan):
     assert response.status_code == 200
     assert response.json() == {"plan": "plan for: Add dark mode"}
     assert fake_plan == ["Add dark mode"]
+
+
+def test_allowed_repo_is_passed_to_planner(client, fake_plan, monkeypatch):
+    monkeypatch.setattr(planner_service, "ALLOWED_REPOS", {"Austin-Brock/factory-sandbox"})
+    response = client.post(
+        "/invocations", json={"ticket": "Add dark mode", "repo": "Austin-Brock/factory-sandbox"}
+    )
+    assert response.status_code == 200
+    assert fake_plan == [("Add dark mode", "Austin-Brock/factory-sandbox")]
+
+
+@pytest.mark.parametrize("repo", ["someone/else", "../etc", "no-slash"])
+def test_unlisted_or_malformed_repo_is_rejected(client, fake_plan, monkeypatch, repo):
+    monkeypatch.setattr(planner_service, "ALLOWED_REPOS", {"Austin-Brock/factory-sandbox"})
+    response = client.post("/invocations", json={"ticket": "Add dark mode", "repo": repo})
+    assert response.status_code == 400
+    assert fake_plan == []
+
+
+def test_repo_download_failure_returns_502(client, monkeypatch):
+    def plan_ticket(ticket, repo=None):
+        raise repo_tools.RepoError("too large")
+
+    monkeypatch.setattr(planner_service, "ALLOWED_REPOS", {"a/b"})
+    monkeypatch.setattr(planner, "plan_ticket", plan_ticket)
+    response = client.post("/invocations", json={"ticket": "x", "repo": "a/b"})
+    assert response.status_code == 502
+    assert response.json()["details"] == "too large"
+
+
+def test_over_budget_returns_422(client, monkeypatch):
+    def plan_ticket(ticket, repo=None):
+        raise planner.OverBudgetError("looped")
+
+    monkeypatch.setattr(planner, "plan_ticket", plan_ticket)
+    response = client.post("/invocations", json={"ticket": "x"})
+    assert response.status_code == 422
+    assert response.json()["error"] == "Planner exceeded its exploration budget"
+
+
+def test_empty_plan_returns_clear_error(client, monkeypatch):
+    def plan_ticket(ticket, repo=None):
+        raise planner.EmptyPlanError("empty")
+
+    monkeypatch.setattr(planner, "plan_ticket", plan_ticket)
+    response = client.post("/invocations", json={"ticket": "x"})
+    assert response.status_code == 502
+    assert response.json()["error"] == "Planner returned an empty plan"
+
+
+def test_corrupt_archive_returns_502(client, monkeypatch):
+    import tarfile
+
+    def plan_ticket(ticket, repo=None):
+        raise tarfile.ReadError("not a gzip file")
+
+    monkeypatch.setattr(planner_service, "ALLOWED_REPOS", {"a/b"})
+    monkeypatch.setattr(planner, "plan_ticket", plan_ticket)
+    response = client.post("/invocations", json={"ticket": "x", "repo": "a/b"})
+    assert response.status_code == 502
+    assert response.json()["error"] == "Could not read the repository"
 
 
 def test_ticket_whitespace_is_trimmed(client, fake_plan):
@@ -58,7 +119,7 @@ def test_invalid_payload_is_rejected_without_calling_model(client, fake_plan, pa
 
 
 def test_token_cap_returns_clear_error(client, monkeypatch):
-    def plan_ticket(ticket):
+    def plan_ticket(ticket, repo=None):
         raise MaxTokensReachedException("cap hit")
 
     monkeypatch.setattr(planner, "plan_ticket", plan_ticket)
@@ -68,7 +129,7 @@ def test_token_cap_returns_clear_error(client, monkeypatch):
 
 
 def raise_client_error(code):
-    def plan_ticket(ticket):
+    def plan_ticket(ticket, repo=None):
         raise ClientError(
             {"Error": {"Code": code, "Message": "arn:aws:iam::111111111111:role/secret"}},
             "ConverseStream",
@@ -93,7 +154,7 @@ def test_bedrock_errors_are_mapped_without_leaking_details(client, monkeypatch, 
 
 
 def test_throttling_returns_429(client, monkeypatch):
-    def plan_ticket(ticket):
+    def plan_ticket(ticket, repo=None):
         raise ModelThrottledException("slow down")
 
     monkeypatch.setattr(planner, "plan_ticket", plan_ticket)
@@ -108,7 +169,7 @@ def test_each_ticket_gets_a_fresh_agent(monkeypatch):
         def __call__(self, ticket):
             return f"plan for: {ticket}"
 
-    def build_planner(stream_to_stdout=True):
+    def build_planner(stream_to_stdout=True, tools=None):
         built.append(stream_to_stdout)
         return FakeAgent()
 

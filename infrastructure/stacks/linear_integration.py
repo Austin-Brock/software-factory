@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
@@ -26,6 +27,7 @@ class LinearIntegration(Construct):
         *,
         runtime: agentcore.Runtime,
         trigger_label: str,
+        team_repos: dict[str, str],
     ) -> None:
         super().__init__(scope, construct_id)
         stack = Stack.of(self)
@@ -63,11 +65,13 @@ class LinearIntegration(Construct):
         self.worker = function(
             "Worker",
             "linear.handlers.worker",
-            Duration.minutes(5),
+            # Repo exploration can take several minutes on large tickets.
+            Duration.minutes(10),
             {
                 "LINEAR_API_KEY_PARAM": API_KEY_PARAM,
                 "PLANNER_RUNTIME_ARN": runtime.agent_runtime_arn,
                 "TRIGGER_LABEL": trigger_label,
+                "TEAM_REPOS": json.dumps(team_repos, sort_keys=True),
             },
         )
         # A retry would start a second billed planner run and a duplicate comment.

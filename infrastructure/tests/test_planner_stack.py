@@ -16,6 +16,7 @@ def synth(model_id="openai.gpt-oss-120b-1:0") -> Template:
         budget_name="monthly-account-cap",
         budget_alert_email="alerts@example.com",
         linear_trigger_label="factory:plan",
+        linear_team_repos={"FAC": "Austin-Brock/factory-sandbox"},
         env=cdk.Environment(account="111111111111", region="us-east-1"),
     )
     return Template.from_stack(stack)
@@ -39,6 +40,7 @@ def test_runtime_avoids_always_on_costs(template):
                 "BEDROCK_MODEL_ID": "openai.gpt-oss-120b-1:0",
                 "PLANNER_MAX_TOKENS": "4096",
                 "PLANNER_MAX_TICKET_CHARS": "20000",
+                "PLANNER_ALLOWED_REPOS": "Austin-Brock/factory-sandbox",
             },
         },
     )
@@ -186,7 +188,15 @@ def test_worker_never_retries(template):
         "AWS::Lambda::Function",
         {
             "Handler": "linear.handlers.worker",
-            "Environment": {"Variables": Match.object_like({"TRIGGER_LABEL": "factory:plan"})},
+            "Timeout": 600,
+            "Environment": {
+                "Variables": Match.object_like(
+                    {
+                        "TRIGGER_LABEL": "factory:plan",
+                        "TEAM_REPOS": '{"FAC": "Austin-Brock/factory-sandbox"}',
+                    }
+                )
+            },
         },
     )
 

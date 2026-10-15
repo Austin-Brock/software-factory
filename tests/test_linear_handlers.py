@@ -23,6 +23,7 @@ class FakeAws:
         self.planner_raw = None
         self.planner_error = None
         self.tickets = []
+        self.repos = []
 
     def client(self, service, **kwargs):
         return self
@@ -49,14 +50,17 @@ class FakeAws:
             raise self.planner_error
         if self.planner_error:
             raise ClientError({"Error": {"Code": self.planner_error}}, "InvokeAgentRuntime")
-        self.tickets.append(json.loads(kwargs["payload"])["ticket"])
+        payload = json.loads(kwargs["payload"])
+        self.tickets.append(payload["ticket"])
+        self.repos.append(payload.get("repo"))
         raw = self.planner_raw or json.dumps(self.planner_result).encode()
         return {"response": io.BytesIO(raw)}
 
 
 class FakeLinear:
-    def __init__(self, label_names, description="Persist the preference.", exists=True):
+    def __init__(self, label_names, description="Persist the preference.", exists=True, team="FAC"):
         self.label_names = label_names
+        self.team = team
         self.description = description
         self.exists = exists
         self.comment_error = None
@@ -74,6 +78,7 @@ class FakeLinear:
             "title": "Add dark mode",
             "description": self.description,
             "url": "https://linear.app/x/issue/FAC-1",
+            "team": {"key": self.team},
             "labels": {"nodes": [{"id": i, "name": n} for i, n in self.label_names.items()]},
         }
 
@@ -96,6 +101,7 @@ def aws(monkeypatch):
         "WORKER_FUNCTION": "worker",
         "PLANNER_RUNTIME_ARN": "arn:runtime",
         "TRIGGER_LABEL": "factory:plan",
+        "TEAM_REPOS": '{"FAC": "Austin-Brock/factory-sandbox"}',
     }.items():
         monkeypatch.setenv(name, value)
     return fake
@@ -261,3 +267,26 @@ def test_parameters_are_refreshed_after_ttl(monkeypatch):
     assert handlers._parameter("/p") == "v2"
     handlers._client.cache_clear()
     handlers._parameters.clear()
+
+
+def test_worker_plans_against_the_teams_repo(aws, monkeypatch):
+    worker_with(aws, monkeypatch)
+    assert aws.repos == ["Austin-Brock/factory-sandbox"]
+
+
+def test_worker_plans_without_repo_for_unmapped_team(aws, monkeypatch):
+    worker_with(aws, monkeypatch, team="OPS")
+    assert aws.repos == [None]
+
+
+def test_worker_never_posts_blank_plan(aws, monkeypatch):
+    aws.planner_result = {"plan": "   "}
+    result, linear = worker_with(aws, monkeypatch)
+    assert result == {"failed": "FAC-1"}
+    assert "empty plan" in linear.comments[0]
+
+
+@pytest.mark.parametrize("raw", ["not json", '"FAC=a/b"', '{"FAC": 42}'])
+def test_malformed_team_repos_falls_back_to_no_repo(monkeypatch, raw):
+    monkeypatch.setenv("TEAM_REPOS", raw)
+    assert handlers.repo_for_team("FAC") is None

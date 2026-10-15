@@ -41,6 +41,8 @@ curl -X POST localhost:8080/invocations \
 
 Each request builds a fresh agent, so tickets never share conversation history.
 
+Pass `"repo": "owner/name"` to have the planner explore a read-only snapshot of that repo first (`list_files`, `read_file`, `search`; at most 25 tool calls / 200 KB per plan). The repo must be in `PLANNER_ALLOWED_REPOS` and public: snapshots are unauthenticated downloads of the default branch. Private repos need a GitHub token, which is planned alongside the builder agent. Locally: `PLANNER_REPO=Austin-Brock/factory-sandbox python -m agents.planner`.
+
 ## Run the planner container
 
 AgentCore runs the ARM64 image built from `Dockerfile`. `.dockerignore` keeps `.env` and everything except `agents/` and `requirements.txt` out of it.
@@ -85,4 +87,5 @@ pytest
 1. ✅ Planning agent running locally against Bedrock
 2. ✅ Deploy to Bedrock AgentCore via CDK
 3. ✅ Linear: adding the `factory:plan` label posts a plan as a comment (setup in `infrastructure/README.md`)
-4. Planner reads the target repo's code so plans name real files ← next
+4. ✅ Planner explores the target repo (read-only) so plans name real files
+5. Builder agent implements the plan and opens a PR for review ← next

@@ -40,6 +40,7 @@ class PlannerStack(Stack):
         budget_name: str,
         budget_alert_email: str,
         linear_trigger_label: str,
+        linear_team_repos: dict[str, str],
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -66,6 +67,8 @@ class PlannerStack(Stack):
                 "BEDROCK_MODEL_ID": model_id,
                 "PLANNER_MAX_TOKENS": max_tokens,
                 "PLANNER_MAX_TICKET_CHARS": max_ticket_chars,
+                # Only repos mapped to a Linear team may be downloaded.
+                "PLANNER_ALLOWED_REPOS": ",".join(sorted(set(linear_team_repos.values()))),
             },
         )
 
@@ -80,7 +83,11 @@ class PlannerStack(Stack):
         )
 
         self.linear = LinearIntegration(
-            self, "Linear", runtime=self.runtime, trigger_label=linear_trigger_label
+            self,
+            "Linear",
+            runtime=self.runtime,
+            trigger_label=linear_trigger_label,
+            team_repos=linear_team_repos,
         )
 
         self._add_budget_kill_switch(

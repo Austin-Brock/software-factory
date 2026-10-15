@@ -13,6 +13,7 @@ query Issue($id: String!) {
     title
     description
     url
+    team { key }
     labels { nodes { id name } }
   }
 }

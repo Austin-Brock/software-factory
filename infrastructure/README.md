@@ -27,6 +27,7 @@ Everything is tagged `project=software-factory`. The budget itself was created o
 | `plannerMaxTicketChars` | `20000` |
 | `budgetName` | `monthly-account-cap` |
 | `linearTriggerLabel` | `factory:plan` |
+| `linearTeamRepos` | `{"FAC": "Austin-Brock/factory-sandbox"}`: tickets from each team are planned against that repo. The values also form the planner's download allowlist. |
 
 The kill-switch alert email is personal, so it is not committed: set `BUDGET_ALERT_EMAIL` in the repo-root `.env` (or pass `-c budgetAlertEmail=...`).
 
