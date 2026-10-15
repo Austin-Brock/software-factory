@@ -40,6 +40,22 @@ curl -X POST localhost:8080/invocations \
 
 Each request builds a fresh agent, so tickets never share conversation history.
 
+## Run the planner container
+
+AgentCore runs the ARM64 image built from `Dockerfile`. `.dockerignore` keeps `.env` and everything except `agents/` and `requirements.txt` out of it.
+
+```bash
+docker build -t software-factory-planner:local .
+
+# Local test only: pass short-lived credentials from your SSO session.
+# In AWS, the container gets permissions from its IAM role instead.
+eval "$(aws configure export-credentials --profile software-factory --format env)"
+docker run --rm -p 8080:8080 \
+  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+  -e AWS_REGION=us-east-1 -e BEDROCK_MODEL_ID=openai.gpt-oss-120b-1:0 \
+  software-factory-planner:local
+```
+
 ## Cost limits
 
 | Setting (`.env`) | Default | Purpose |
