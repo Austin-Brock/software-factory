@@ -88,14 +88,32 @@ def extract(data: bytes, destination: Path) -> Path:
     return roots[0]
 
 
+def commit_sha(data: bytes) -> str | None:
+    """The commit a GitHub tarball was made from (git archive's pax comment)."""
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+        archive.getmembers()
+        sha = archive.pax_headers.get("comment", "")
+    return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else None
+
+
 @contextmanager
-def snapshot(repo: str, ref: str = "HEAD"):
-    """Download the repo at ref (HEAD = its default branch) into a temp dir."""
+def snapshot_at_commit(repo: str, ref: str = "HEAD"):
+    """Download the repo at ref (HEAD = its default branch) into a temp dir.
+
+    Yields (root, commit_sha) so changes can be committed on top of exactly
+    the code that was read.
+    """
     if not REPO_PATTERN.match(repo):
         raise RepoError(f"Invalid repository name {repo!r}")
     data = _download(repo, ref)
     with tempfile.TemporaryDirectory(prefix="repo-") as tmp:
-        yield extract(data, Path(tmp))
+        yield extract(data, Path(tmp)), commit_sha(data)
+
+
+@contextmanager
+def snapshot(repo: str, ref: str = "HEAD"):
+    with snapshot_at_commit(repo, ref) as (root, _sha):
+        yield root
 
 
 def _resolve(root: Path, path: str) -> Path | None:
