@@ -18,9 +18,10 @@ def key_pair():
 
 
 class FakeGitHub:
-    def __init__(self, existing_branches=()):
+    def __init__(self, existing_branches=(), modes=None):
         self.calls = []
         self.existing = set(existing_branches)
+        self.modes = modes or {"src/App.tsx": "100644", "src/Old.tsx": "100644"}
 
     def __call__(self, method, path, token, body=None):
         self.calls.append((method, path, body))
@@ -30,6 +31,8 @@ class FakeGitHub:
             return {"default_branch": "main"}
         if "/git/commits/" in path:
             return {"tree": {"sha": "base-tree"}}
+        if method == "GET" and "/git/trees/" in path:
+            return {"tree": [{"path": p, "mode": m} for p, m in self.modes.items()]}
         if path.endswith("/git/blobs"):
             return {"sha": f"blob-{len(self.calls)}"}
         if path.endswith("/git/trees"):
@@ -109,3 +112,17 @@ def test_client_never_merges(monkeypatch):
     open_pr(fake, monkeypatch)
     assert not any("merge" in path for _, path, _ in fake.calls)
     assert json.dumps(client.TOKEN_PERMISSIONS) == '{"contents": "write", "pull_requests": "write"}'
+
+
+def test_executable_files_keep_their_mode(monkeypatch):
+    fake = FakeGitHub(modes={"scripts/run.sh": "100755"})
+    open_pr(fake, monkeypatch, changes={"scripts/run.sh": "#!/bin/sh\necho hi\n", "src/New.ts": "x"})
+    tree = {e["path"]: e["mode"] for _, p, b in fake.calls if p.endswith("/git/trees") for e in b["tree"]}
+    assert tree == {"scripts/run.sh": "100755", "src/New.ts": "100644"}
+
+
+def test_symlinks_are_never_rewritten(monkeypatch):
+    fake = FakeGitHub(modes={"link": "120000"})
+    with pytest.raises(client.GitHubError, match="not a regular file"):
+        open_pr(fake, monkeypatch, changes={"link": "target"})
+    assert not any(p.endswith("/git/refs") for _, p, _ in fake.calls)

@@ -41,8 +41,23 @@ class BuildLimitError(RuntimeError):
     pass
 
 
+LEAKED_CALL = re.compile(r"to=functions\.(\w+)[^{]*?<\|message\|>\s*(\{)", re.DOTALL)
+
+
 def has_leaked_tool_call(text: str) -> bool:
     return bool(HARMONY_MARKERS.search(text or ""))
+
+
+def parse_leaked_tool_call(text: str) -> tuple[str, dict] | None:
+    """Extract (tool name, arguments) from a tool call gpt-oss wrote as text."""
+    match = LEAKED_CALL.search(text or "")
+    if not match:
+        return None
+    try:
+        arguments, _ = json.JSONDecoder().raw_decode(text, match.start(2))
+    except ValueError:
+        return None
+    return (match.group(1), arguments) if isinstance(arguments, dict) else None
 
 
 def forbidden_reason(path: str) -> str | None:
@@ -78,7 +93,19 @@ class Workspace:
                 changed[rel] = None if current is None else current.decode("utf-8")
         return changed
 
+    def original_scripts(self) -> dict:
+        original = self.originals.get("package.json", b"") if "package.json" in self.originals else None
+        if original is None:
+            return self.scripts()
+        try:
+            return json.loads(original or b"{}").get("scripts", {})
+        except ValueError:
+            return {}
+
     def limit_problem(self) -> str | None:
+        # The final checks run these scripts, so changing them could fake a pass.
+        if "package.json" in self.originals and self.scripts() != self.original_scripts():
+            return "package.json scripts may not be changed"
         changes = self.changes()
         if len(changes) > MAX_CHANGED_FILES:
             return f"Change touches {len(changes)} files (limit {MAX_CHANGED_FILES})"
@@ -153,7 +180,7 @@ def make_tools(workspace: Workspace, budget: repo_tools.ToolBudget) -> list:
             path: File path relative to the repository root.
             content: The complete new file content.
         """
-        if stop := budget.spend() or out_of_time():
+        if stop := budget.spend(count_bytes=False) or out_of_time():
             return stop
         resolved = target_for(path)
         if isinstance(resolved, str):
@@ -161,7 +188,8 @@ def make_tools(workspace: Workspace, budget: repo_tools.ToolBudget) -> list:
         rel, target = resolved
         workspace.remember(rel, target)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        with target.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
         if problem := workspace.limit_problem():
             return f"Wrote {rel}, but {problem}. Undo or shrink changes."
         return f"Wrote {rel} ({len(content)} characters)"
@@ -175,7 +203,7 @@ def make_tools(workspace: Workspace, budget: repo_tools.ToolBudget) -> list:
             old_text: Text to find; must appear exactly once in the file.
             new_text: Replacement text.
         """
-        if stop := budget.spend() or out_of_time():
+        if stop := budget.spend(count_bytes=False) or out_of_time():
             return stop
         resolved = target_for(path)
         if isinstance(resolved, str):
@@ -183,12 +211,18 @@ def make_tools(workspace: Workspace, budget: repo_tools.ToolBudget) -> list:
         rel, target = resolved
         if not target.is_file():
             return f"Not a file: {rel}; use write_file to create it"
-        text = target.read_text(encoding="utf-8")
+        # newline="" keeps CRLF files CRLF instead of rewriting every line.
+        with target.open(encoding="utf-8", newline="") as handle:
+            text = handle.read()
+        if "\r\n" in text and "\r\n" not in old_text:
+            old_text = old_text.replace("\n", "\r\n")
+            new_text = new_text.replace("\n", "\r\n")
         count = text.count(old_text)
         if count != 1:
             return f"old_text appears {count} times in {rel}; it must appear exactly once"
         workspace.remember(rel, target)
-        target.write_text(text.replace(old_text, new_text), encoding="utf-8")
+        with target.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(text.replace(old_text, new_text))
         if problem := workspace.limit_problem():
             return f"Edited {rel}, but {problem}. Undo or shrink changes."
         return f"Edited {rel}"
@@ -200,7 +234,7 @@ def make_tools(workspace: Workspace, budget: repo_tools.ToolBudget) -> list:
         Args:
             path: File path relative to the repository root.
         """
-        if stop := budget.spend() or out_of_time():
+        if stop := budget.spend(count_bytes=False) or out_of_time():
             return stop
         resolved = target_for(path)
         if isinstance(resolved, str):
@@ -220,7 +254,7 @@ def make_tools(workspace: Workspace, budget: repo_tools.ToolBudget) -> list:
             name: One of "install", "lint", "typecheck", "test", "build".
                 Run "install" once before the others.
         """
-        if stop := budget.spend() or out_of_time():
+        if stop := budget.spend(count_bytes=False) or out_of_time():
             return stop
         if name not in CHECKS:
             return f"Unknown check {name!r}; choose from {', '.join(CHECKS)}"

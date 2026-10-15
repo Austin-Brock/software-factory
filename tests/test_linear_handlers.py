@@ -417,3 +417,31 @@ def test_leaked_tool_text_in_summary_blocks_the_pr(aws, monkeypatch, github):
     assert result == {"rejected": "FAC-1"}
     assert github == []
     assert "did not finish cleanly" in linear.comments[0]
+
+
+def test_huge_pr_body_is_capped(aws, monkeypatch, github):
+    event = dict(BUILD_EVENT, plan="p" * 50_000)
+    failing = {**BUILD_RESULT, "passed": False, "summary": "s" * 30_000,
+               "checks": {n: {"passed": False, "output": "o" * 5_000} for n in ("lint", "test", "build")}}
+    body = handlers.pr_body(event, failing)
+    assert len(body) <= handlers.MAX_PR_BODY_CHARS
+    assert body.endswith("A human must review and merge this PR.")
+
+
+def test_build_handoff_failure_is_reported(aws, monkeypatch):
+    monkeypatch.setenv("BUILD_FUNCTION", "build")
+    aws.invoke_error = ClientError({"Error": {"Code": "AccessDeniedException"}}, "Invoke")
+    result, linear = worker_with(aws, monkeypatch)
+    assert result == {"planned": "FAC-1"}
+    assert "build could not start" in linear.comments[-1]
+
+
+def test_worker_and_builder_rules_stay_in_sync():
+    from agents import builder_tools
+    from integrations.github import rules
+
+    assert rules.FORBIDDEN_PREFIXES == builder_tools.FORBIDDEN_PREFIXES
+    assert rules.FORBIDDEN_NAMES == builder_tools.FORBIDDEN_NAMES
+    assert rules.MAX_CHANGED_FILES == builder_tools.MAX_CHANGED_FILES
+    assert rules.MAX_CHANGE_BYTES == builder_tools.MAX_CHANGE_BYTES
+    assert handlers.LEAKED_TOOL_TEXT.pattern == builder_tools.HARMONY_MARKERS.pattern

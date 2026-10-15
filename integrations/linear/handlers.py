@@ -253,7 +253,13 @@ def worker(event, context):
 
     logger.info("Posted %s on %s", "plan" if planned else "error", issue["identifier"])
     if planned and repo and os.environ.get("BUILD_FUNCTION"):
-        # Builds start automatically once a plan is posted.
+        start_build(linear, issue, result["plan"], repo)
+    return {"planned" if planned else "failed": issue["identifier"]}
+
+
+def start_build(linear: LinearClient, issue: dict, plan: str, repo: str) -> None:
+    """Builds start automatically once a plan is posted."""
+    try:
         _client("lambda").invoke(
             FunctionName=os.environ["BUILD_FUNCTION"],
             InvocationType="Event",
@@ -264,18 +270,35 @@ def worker(event, context):
                     "title": issue["title"],
                     "url": issue.get("url"),
                     "ticket": format_ticket(issue),
-                    "plan": result["plan"],
+                    "plan": plan,
                     "repo": repo,
                 }
             ).encode(),
         )
-    return {"planned" if planned else "failed": issue["identifier"]}
+    except (BotoCoreError, ClientError) as exc:
+        logger.exception("Could not start the build for %s", issue["identifier"])
+        _safe_comment(
+            linear,
+            issue["id"],
+            error_comment({"error": "The build could not start", "details": type(exc).__name__}, "build this"),
+        )
+
+
+def _safe_comment(linear: LinearClient, issue_id: str, body: str) -> None:
+    try:
+        linear.comment(issue_id, body)
+    except (LinearError, urllib.error.URLError):
+        logger.exception("Could not comment on %s; comment body follows:\n%s", issue_id, body)
 
 
 def branch_name(identifier: str, title: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:40].strip("-")
     return f"factory/{identifier.lower()}-{slug}" if slug else f"factory/{identifier.lower()}"
 
+
+# GitHub rejects PR bodies over 65,536 characters.
+MAX_PR_BODY_CHARS = 60_000
+MAX_PLAN_IN_BODY_CHARS = 20_000
 
 LEAKED_TOOL_TEXT = re.compile(r"<\|(?:message|call|channel|start|end|constrain)\|>|\bto=functions\.|</?analysis\b")
 
@@ -291,16 +314,22 @@ def pr_body(event: dict, result: dict) -> str:
         for name, c in checks.items()
         if c["passed"] is False
     )
+    plan = event["plan"]
+    if len(plan) > MAX_PLAN_IN_BODY_CHARS:
+        plan = plan[:MAX_PLAN_IN_BODY_CHARS] + "\n\n… plan truncated; see the Linear ticket"
     status = "All checks passed." if result.get("passed") else "**❌ Checks are failing — this PR is a draft.**"
     link = f"[{event['identifier']}]({event['url']})" if event.get("url") else event["identifier"]
-    return (
+    body = (
         f"Implements {link}: {event['title']}\n\n"
         f"## Summary\n{result.get('summary', '').strip()}\n\n"
         f"## Checks (run by the builder)\n{status}\n\n| Check | Result |\n|---|---|\n{rows}\n\n"
         f"{failures}\n\n"
-        f"<details><summary>Implementation plan</summary>\n\n{event['plan']}\n</details>\n\n"
-        "---\n🏭 Built by software-factory. A human must review and merge this PR."
+        f"<details><summary>Implementation plan</summary>\n\n{plan}\n</details>\n\n"
     )
+    footer = "---\n🏭 Built by software-factory. A human must review and merge this PR."
+    if len(body) + len(footer) > MAX_PR_BODY_CHARS:
+        body = body[: MAX_PR_BODY_CHARS - len(footer) - 40] + "\n\n… truncated\n\n"
+    return body + footer
 
 
 def build_worker(event, context):
@@ -311,7 +340,7 @@ def build_worker(event, context):
     result = run_builder(event["ticket"], event["plan"], event["repo"])
     if "changes" not in result:
         logger.error("Builder failed for %s: %s", identifier, result)
-        linear.comment(issue_id, error_comment(result, "build this"))
+        _safe_comment(linear, issue_id, error_comment(result, "build this"))
         return {"failed": identifier}
 
     problems = rules.change_problems(result["changes"])
@@ -319,7 +348,8 @@ def build_worker(event, context):
         problems.append("The builder did not finish cleanly (no valid summary)")
     if problems:
         logger.error("Rejected change for %s: %s", identifier, problems)
-        linear.comment(
+        _safe_comment(
+            linear,
             issue_id,
             error_comment({"error": "The change was rejected", "details": "; ".join(problems)}, "open a PR"),
         )
@@ -343,12 +373,16 @@ def build_worker(event, context):
             body=pr_body(event, result),
             draft=not result.get("passed"),
         )
-    except (GitHubError, urllib.error.URLError, KeyError) as exc:
+    except (GitHubError, urllib.error.URLError, KeyError, ClientError) as exc:
         logger.exception("Could not open a PR for %s", identifier)
-        linear.comment(issue_id, error_comment({"error": "Could not open the pull request", "details": str(exc)}, "open a PR"))
+        _safe_comment(
+            linear,
+            issue_id,
+            error_comment({"error": "Could not open the pull request", "details": str(exc)}, "open a PR"),
+        )
         return {"failed": identifier}
 
     verdict = "all checks passed" if result.get("passed") else "❌ checks failing, opened as draft"
-    linear.comment(issue_id, f"🔨 **Pull request opened:** [#{pull['number']}]({pull['url']}) ({verdict})")
+    _safe_comment(linear, issue_id, f"🔨 **Pull request opened:** [#{pull['number']}]({pull['url']}) ({verdict})")
     logger.info("Opened PR #%s for %s", pull["number"], identifier)
     return {"pr": pull["number"]}

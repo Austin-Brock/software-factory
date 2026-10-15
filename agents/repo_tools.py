@@ -43,23 +43,29 @@ class ToolBudget:
     files_read: list[str] = field(default_factory=list)
     hard_stop: Callable[[], None] | None = None
     stopped: bool = False
+    stop_message: str = "Tool budget exhausted. Stop exploring and write the plan now."
 
     def charge(self, output: str) -> str:
         """Count tool output toward the byte budget and pass it through."""
         self.bytes_read += len(output)
         return output
 
-    def spend(self) -> str | None:
-        """Count one tool call; return a stop message once the budget is used up."""
+    def spend(self, count_bytes: bool = True) -> str | None:
+        """Count one tool call; return a stop message once the budget is used up.
+
+        Edits pass count_bytes=False: the byte budget limits reading, and a
+        builder that has read a lot must still be able to change files.
+        """
         self.calls += 1
-        exhausted = self.calls > self.max_calls or self.bytes_read >= self.max_bytes
+        over_bytes = count_bytes and self.bytes_read >= self.max_bytes
+        exhausted = self.calls > self.max_calls or over_bytes
         if exhausted and self.calls > self.max_calls + self.grace_calls:
             # The model ignored the stop message; cancel instead of looping.
             self.stopped = True
             if self.hard_stop:
                 self.hard_stop()
         if exhausted:
-            return "Tool budget exhausted. Stop exploring and write the plan now."
+            return self.stop_message
         return None
 
 

@@ -41,7 +41,7 @@ Rules:
 """
 
 MAX_TOOL_CALLS = 60
-MAX_NUDGES = 3
+MAX_NUDGES = 5
 NUDGE = (
     "You have not called finish, so the work is not complete. If your last "
     "message tried to call a tool as text, make that call properly with the "
@@ -53,44 +53,60 @@ NUDGE = (
 class IncompleteBuildError(RuntimeError):
     pass
 MAX_BYTES_READ = 400_000
-BUILD_SECONDS = 12 * 60
-FINAL_CHECKS = ("lint", "test", "build")
+# The agent gets 9 minutes; the final checks get their own 3 minutes after that,
+# all inside the build worker's 15-minute Lambda limit.
+AGENT_SECONDS = 9 * 60
+FINAL_CHECK_SECONDS = 3 * 60
+FINAL_CHECKS = ("lint", "typecheck", "test", "build")
+DEPENDENCY_FILES = ("package.json", "package-lock.json")
 
 
 def build_ticket(ticket: str, plan: str, repo: str) -> dict:
     """Implement the plan; returns the change set, summary and check results."""
     with repo_tools.snapshot_at_commit(repo) as (root, base_sha):
+        # Without the base commit the PR can't be opened; fail before paying for a build.
+        if not base_sha:
+            raise repo_tools.RepoError(f"Could not determine the commit of {repo}'s snapshot")
         workspace = builder_tools.Workspace(
-            root=root, deadline=time.monotonic() + BUILD_SECONDS
+            root=root, deadline=time.monotonic() + AGENT_SECONDS
         )
-        budget = repo_tools.ToolBudget(max_calls=MAX_TOOL_CALLS, max_bytes=MAX_BYTES_READ)
+        budget = repo_tools.ToolBudget(
+            max_calls=MAX_TOOL_CALLS,
+            max_bytes=MAX_BYTES_READ,
+            stop_message="Tool budget exhausted. Stop and call finish with your summary now.",
+        )
         model = BedrockModel(
             model_id=os.environ.get("BUILDER_MODEL_ID") or os.environ["BEDROCK_MODEL_ID"],
             region_name=os.environ.get("AWS_REGION", "us-east-1"),
             max_tokens=planner.max_tokens(),
         )
-        agent = Agent(
-            model=model,
-            system_prompt=SYSTEM_PROMPT,
-            tools=builder_tools.make_tools(workspace, budget),
-            callback_handler=None,
-        )
+        tools = builder_tools.make_tools(workspace, budget)
+        agent = Agent(model=model, system_prompt=SYSTEM_PROMPT, tools=tools, callback_handler=None)
         budget.hard_stop = agent.cancel
         workspace.on_finish = agent.cancel
-        run_until_finished(agent, workspace, budget, f"{ticket}\n\n<plan>\n{plan}\n</plan>")
+        run_until_finished(
+            agent, workspace, budget, f"{ticket}\n\n<plan>\n{plan}\n</plan>", tools
+        )
 
         workspace.check_limits()
         changes = workspace.changes()
         # Report the checks as we observe them, not as the model describes them.
+        workspace.deadline = time.monotonic() + FINAL_CHECK_SECONDS
         checks = {}
         if changes:
-            install = workspace.run("install")
+            previous = workspace.check_results.get("install")
+            dependencies_changed = any(f in changes for f in DEPENDENCY_FILES)
+            # Reuse the agent's install unless dependencies changed after it.
+            if previous and previous["passed"] and not dependencies_changed:
+                install = previous
+            else:
+                install = workspace.run("install")
             checks["install"] = install
             for name in FINAL_CHECKS:
-                checks[name] = workspace.run(name) if install["passed"] else {
-                    "passed": False,
-                    "output": "Skipped because install failed",
-                }
+                if not install["passed"]:
+                    checks[name] = {"passed": False, "output": "Skipped because install failed"}
+                elif name in workspace.scripts():
+                    checks[name] = workspace.run(name)
         passed = bool(changes) and all(r["passed"] is not False for r in checks.values())
         return {
             "baseSha": base_sha,
@@ -102,18 +118,46 @@ def build_ticket(ticket: str, plan: str, repo: str) -> dict:
         }
 
 
-def run_until_finished(agent, workspace, budget, prompt: str) -> None:
+def recover_leaked_call(text: str, tools: list) -> str | None:
+    """Run a tool call the model wrote as text; returns a nudge with its result.
+
+    The call goes through the same jailed tools, so the same rules apply.
+    """
+    parsed = builder_tools.parse_leaked_tool_call(text)
+    if not parsed:
+        return None
+    name, arguments = parsed
+    by_name = {t.tool_name: t for t in tools}
+    if name not in by_name:
+        return None
+    try:
+        output = by_name[name](**arguments)
+    except TypeError as exc:
+        output = f"Invalid arguments: {exc}"
+    return (
+        f"Your last message contained a call to {name} written as text instead of "
+        f"a real tool call. I ran it for you; the result was:\n\n{str(output)[:4000]}\n\n"
+        "From now on use real tool calls. Continue the work, then call finish."
+    )
+
+
+def run_until_finished(agent, workspace, budget, prompt: str, tools: list | None = None) -> None:
     """Run the agent until it calls finish; nudge it if it stops early.
 
-    Ending a turn with text (or a tool call leaked as text) is not finishing.
+    Ending a turn with text is not finishing. If the text contains a tool call
+    gpt-oss leaked in its internal format, that call is executed and its
+    result fed back, so the leak becomes progress instead of a dead end.
     """
-    agent(prompt)
+    result = agent(prompt)
     for _ in range(MAX_NUDGES):
         if budget.stopped:
             raise planner.OverBudgetError(f"Builder kept working after {budget.calls} tool calls")
         if workspace.summary:
             return
-        agent(NUDGE)
+        nudge = recover_leaked_call(str(result), tools or []) or NUDGE
+        if workspace.summary:  # the recovered call may have been finish
+            return
+        result = agent(nudge)
     if budget.stopped:
         raise planner.OverBudgetError(f"Builder kept working after {budget.calls} tool calls")
     if not workspace.summary:

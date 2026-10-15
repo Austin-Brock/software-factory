@@ -148,3 +148,47 @@ def test_finish_requires_a_clean_summary_and_real_changes(workspace):
     assert workspace.summary is None and not finished
     assert t["finish"]("## Summary\nChanged a.") == "Finished."
     assert workspace.summary == "## Summary\nChanged a." and finished == [True]
+
+
+def test_package_json_scripts_cannot_be_changed(workspace):
+    t, _ = tools(workspace)
+    original = (workspace.root / "package.json").read_text()
+    result = t["edit_file"]("package.json", '"vitest run"', '"exit 0"')
+    assert "scripts may not be changed" in result
+    with pytest.raises(builder_tools.BuildLimitError, match="scripts"):
+        workspace.check_limits()
+    t["write_file"]("package.json", original)
+    workspace.check_limits()
+
+
+def test_dependency_changes_in_package_json_are_allowed(workspace):
+    t, _ = tools(workspace)
+    data = json.loads((workspace.root / "package.json").read_text())
+    data["dependencies"] = {"left-pad": "1.3.0"}
+    assert "may not" not in t["write_file"]("package.json", json.dumps(data))
+    workspace.check_limits()
+
+
+def test_crlf_files_keep_their_line_endings(workspace):
+    path = workspace.root / "src" / "Win.ts"
+    path.write_bytes(b"line one\r\nline two\r\n")
+    t, _ = tools(workspace)
+    t["edit_file"]("src/Win.ts", "line one\nline two", "line one\nline 2")
+    assert path.read_bytes() == b"line one\r\nline 2\r\n"
+
+
+def test_reading_a_lot_does_not_block_editing(workspace):
+    t, budget = tools(workspace, max_bytes=10)
+    t["read_file"]("src/App.tsx")
+    budget.bytes_read = 10_000
+    assert t["edit_file"]("src/App.tsx", "const a = 1", "const a = 2") == "Edited src/App.tsx"
+    assert "budget exhausted" in t["read_file"]("src/App.tsx")
+
+
+def test_parse_leaked_tool_call():
+    text = 'Now lint.</analysis to=functions.run_check<|channel|>commentary code<|message|>{"name":"lint"} trailing'
+    assert builder_tools.parse_leaked_tool_call(text) == ("run_check", {"name": "lint"})
+    nested = 'x to=functions.edit_file code<|message|>{"path":"a","old_text":"{","new_text":"}"}'
+    assert builder_tools.parse_leaked_tool_call(nested) == ("edit_file", {"path": "a", "old_text": "{", "new_text": "}"})
+    assert builder_tools.parse_leaked_tool_call("plain text") is None
+    assert builder_tools.parse_leaked_tool_call("to=functions.x<|message|>{broken") is None

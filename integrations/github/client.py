@@ -83,16 +83,22 @@ def open_pull_request(
     """Commit changes on top of base_sha to a new branch and open a PR."""
     default_branch = _request("GET", f"/repos/{repo}", token)["default_branch"]
     base_tree = _request("GET", f"/repos/{repo}/git/commits/{base_sha}", token)["tree"]["sha"]
+    # Keep each file's existing mode (e.g. executable scripts stay executable).
+    listing = _request("GET", f"/repos/{repo}/git/trees/{base_tree}?recursive=1", token)
+    modes = {entry["path"]: entry["mode"] for entry in listing.get("tree", [])}
 
     tree = []
     for path, content in sorted(changes.items()):
+        mode = modes.get(path, "100644")
+        if mode not in ("100644", "100755"):
+            raise GitHubError(422, f"Refusing to change {path}: it is not a regular file")
         if content is None:
-            tree.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
+            tree.append({"path": path, "mode": mode, "type": "blob", "sha": None})
         else:
             blob = _request(
                 "POST", f"/repos/{repo}/git/blobs", token, {"content": content, "encoding": "utf-8"}
             )
-            tree.append({"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
+            tree.append({"path": path, "mode": mode, "type": "blob", "sha": blob["sha"]})
     new_tree = _request("POST", f"/repos/{repo}/git/trees", token, {"base_tree": base_tree, "tree": tree})
     commit = _request(
         "POST",
