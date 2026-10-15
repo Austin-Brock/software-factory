@@ -94,7 +94,7 @@ class LinearIntegration(Construct):
             )
 
         read_parameter(self.receiver, WEBHOOK_SECRET_PARAM)
-        dedupe.grant(self.receiver, "dynamodb:PutItem")
+        dedupe.grant(self.receiver, "dynamodb:PutItem", "dynamodb:DeleteItem")
         self.worker.grant_invoke(self.receiver)
 
         read_parameter(self.worker, API_KEY_PARAM)

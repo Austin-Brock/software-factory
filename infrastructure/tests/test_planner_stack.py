@@ -142,7 +142,7 @@ def test_budget_kill_switch_denies_bedrock_at_100_percent(template):
     )
 
 
-def test_budgets_role_can_only_attach_kill_switch_to_runtime_role(template):
+def test_budgets_role_can_only_attach_kill_switch_to_agent_roles(template):
     template.has_resource_properties(
         "AWS::IAM::Policy",
         {
@@ -219,6 +219,24 @@ def test_worker_reads_only_the_api_key(template):
                             "Action": "ssm:GetParameter",
                             "Resource": "arn:aws:ssm:us-east-1:111111111111:parameter/software-factory/linear/api-key",
                         }
+                    ]
+                )
+            },
+        },
+    )
+
+
+def test_receiver_can_record_and_release_deliveries(template):
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        {
+            "Roles": [{"Ref": Match.string_like_regexp("LinearReceiverServiceRole")}],
+            "PolicyDocument": {
+                "Statement": Match.array_with(
+                    [
+                        Match.object_like(
+                            {"Effect": "Allow", "Action": ["dynamodb:PutItem", "dynamodb:DeleteItem"]}
+                        )
                     ]
                 )
             },
