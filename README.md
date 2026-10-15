@@ -6,7 +6,7 @@ A lightweight, autonomous software factory powered by AWS Bedrock AgentCore, wit
 | Path | Purpose |
 | --- | --- |
 | `agents/` | Strands agents (starting with `planner.py`) |
-| `integrations/` | Linear, GitHub, and other external connectors |
+| `integrations/` | External connectors: `linear/` (webhook receiver + worker Lambdas) |
 | `orchestration/` | Wiring that routes tickets to agents |
 | `workspace/` | Scratch area for agent working copies |
 | `infrastructure/` | CDK app for AgentCore deployment |
@@ -84,4 +84,5 @@ pytest
 
 1. ✅ Planning agent running locally against Bedrock
 2. ✅ Deploy to Bedrock AgentCore via CDK
-3. Linear tickets trigger the planner automatically ← next
+3. ✅ Linear: adding the `factory:plan` label posts a plan as a comment (setup in `infrastructure/README.md`)
+4. Planner reads the target repo's code so plans name real files ← next
