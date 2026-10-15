@@ -19,8 +19,10 @@ Everything is tagged `project=software-factory`. The budget itself was created o
 | --- | --- |
 | `bedrockModelId` | `openai.gpt-oss-120b-1:0` |
 | `plannerMaxTokens` | `4096` |
+| `plannerMaxTicketChars` | `20000` |
 | `budgetName` | `monthly-account-cap` |
-| `budgetAlertEmail` | budget alert recipient |
+
+The kill-switch alert email is personal, so it is not committed: set `BUDGET_ALERT_EMAIL` in the repo-root `.env` (or pass `-c budgetAlertEmail=...`).
 
 ## Commands
 
@@ -37,4 +39,6 @@ npx aws-cdk@2.1145.0 destroy            # remove everything
 
 ## Releasing the kill switch
 
-If the budget action fires, the planner stops being able to call Bedrock. After reviewing the spend, detach the `BudgetKillSwitchPolicy` from the runtime role (IAM console, or reset the action in AWS Budgets).
+If the budget action fires, the planner stops being able to call Bedrock and returns HTTP 503 "Bedrock refused the request". After reviewing the spend, detach the `BudgetKillSwitchPolicy` from the runtime role (IAM console, or reset the action in AWS Budgets).
+
+**Don't `cdk deploy` while the kill switch is engaged.** The policy is attached outside CloudFormation, and a deploy that changes the runtime role's managed policies could detach it and silently resume spending. Release the kill switch deliberately first, then deploy.

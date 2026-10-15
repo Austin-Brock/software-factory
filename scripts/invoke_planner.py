@@ -9,11 +9,15 @@ import sys
 import uuid
 
 import boto3
+from botocore.config import Config
 from dotenv import load_dotenv
 
 load_dotenv()
 
 RUNTIME_NAME = "software_factory_planner"
+# Plans arrive in one response after generation finishes, which can exceed
+# botocore's 60s default. Retrying would start a second billed invocation.
+INVOKE_CONFIG = Config(read_timeout=600, retries={"total_max_attempts": 1})
 DEFAULT_TICKET = "Add a dark mode toggle that persists between sessions."
 
 
@@ -33,7 +37,7 @@ def main() -> None:
         boto3.client("bedrock-agentcore-control", region_name=region)
     )
 
-    response = boto3.client("bedrock-agentcore", region_name=region).invoke_agent_runtime(
+    response = boto3.client("bedrock-agentcore", region_name=region, config=INVOKE_CONFIG).invoke_agent_runtime(
         agentRuntimeArn=arn,
         # Each ticket gets its own session so nothing carries over between tickets.
         runtimeSessionId=str(uuid.uuid4()),

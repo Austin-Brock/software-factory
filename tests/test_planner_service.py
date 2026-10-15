@@ -1,6 +1,7 @@
 import pytest
+from botocore.exceptions import ClientError
 from starlette.testclient import TestClient
-from strands.types.exceptions import MaxTokensReachedException
+from strands.types.exceptions import MaxTokensReachedException, ModelThrottledException
 
 from agents import planner, planner_service
 
@@ -35,6 +36,11 @@ def test_invocation_returns_plan(client, fake_plan):
     assert fake_plan == ["Add dark mode"]
 
 
+def test_ticket_whitespace_is_trimmed(client, fake_plan):
+    client.post("/invocations", json={"ticket": "  Add dark mode \n"})
+    assert fake_plan == ["Add dark mode"]
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -59,6 +65,40 @@ def test_token_cap_returns_clear_error(client, monkeypatch):
     response = client.post("/invocations", json={"ticket": "Huge ticket"})
     assert response.status_code == 422
     assert "PLANNER_MAX_TOKENS" in response.json()["details"]
+
+
+def raise_client_error(code):
+    def plan_ticket(ticket):
+        raise ClientError(
+            {"Error": {"Code": code, "Message": "arn:aws:iam::111111111111:role/secret"}},
+            "ConverseStream",
+        )
+
+    return plan_ticket
+
+
+@pytest.mark.parametrize(
+    ("code", "status"),
+    [
+        ("AccessDeniedException", 503),
+        ("ServiceUnavailableException", 429),
+        ("ValidationException", 502),
+    ],
+)
+def test_bedrock_errors_are_mapped_without_leaking_details(client, monkeypatch, code, status):
+    monkeypatch.setattr(planner, "plan_ticket", raise_client_error(code))
+    response = client.post("/invocations", json={"ticket": "Add dark mode"})
+    assert response.status_code == status
+    assert "arn:aws" not in response.text
+
+
+def test_throttling_returns_429(client, monkeypatch):
+    def plan_ticket(ticket):
+        raise ModelThrottledException("slow down")
+
+    monkeypatch.setattr(planner, "plan_ticket", plan_ticket)
+    response = client.post("/invocations", json={"ticket": "Add dark mode"})
+    assert response.status_code == 429
 
 
 def test_each_ticket_gets_a_fresh_agent(monkeypatch):

@@ -35,3 +35,15 @@ def test_build_planner_caps_output_tokens(monkeypatch):
 
     monkeypatch.setenv("PLANNER_MAX_TOKENS", "512")
     assert planner.build_planner().model.config["max_tokens"] == 512
+
+
+@pytest.mark.parametrize("raw", ["4k", "0", "-5"])
+def test_invalid_max_tokens_has_clear_error(monkeypatch, raw):
+    monkeypatch.setenv("PLANNER_MAX_TOKENS", raw)
+    with pytest.raises(ValueError, match="PLANNER_MAX_TOKENS must be a positive integer"):
+        planner.max_tokens()
+
+
+def test_blank_max_tokens_uses_default(monkeypatch):
+    monkeypatch.setenv("PLANNER_MAX_TOKENS", "")
+    assert planner.max_tokens() == planner.DEFAULT_MAX_TOKENS

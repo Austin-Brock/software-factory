@@ -18,7 +18,7 @@ A lightweight, autonomous software factory powered by AWS Bedrock AgentCore, wit
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime deps + pytest
 cp .env.example .env   # then set BEDROCK_MODEL_ID
 aws sts get-caller-identity   # confirm AWS credentials
 ```

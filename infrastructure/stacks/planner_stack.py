@@ -10,7 +10,7 @@ from constructs import Construct
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Cross-region inference profile IDs carry a geography prefix.
-INFERENCE_PROFILE_PREFIXES = ("us.", "eu.", "apac.", "global.")
+INFERENCE_PROFILE_PREFIXES = ("us.", "us-gov.", "eu.", "apac.", "jp.", "au.", "ca.", "global.")
 
 
 def model_resource_arns(stack: Stack, model_id: str) -> list[str]:
@@ -34,6 +34,7 @@ class PlannerStack(Stack):
         *,
         model_id: str,
         max_tokens: str,
+        max_ticket_chars: str,
         budget_name: str,
         budget_alert_email: str,
         **kwargs,
@@ -61,6 +62,7 @@ class PlannerStack(Stack):
             environment_variables={
                 "BEDROCK_MODEL_ID": model_id,
                 "PLANNER_MAX_TOKENS": max_tokens,
+                "PLANNER_MAX_TICKET_CHARS": max_ticket_chars,
             },
         )
 
@@ -95,7 +97,11 @@ class PlannerStack(Stack):
         budgets_role = iam.Role(
             self,
             "BudgetActionRole",
-            assumed_by=iam.ServicePrincipal("budgets.amazonaws.com"),
+            # Only budget actions in this account may assume the role.
+            assumed_by=iam.ServicePrincipal(
+                "budgets.amazonaws.com",
+                conditions={"StringEquals": {"aws:SourceAccount": self.account}},
+            ),
         )
         budgets_role.add_to_policy(
             iam.PolicyStatement(

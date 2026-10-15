@@ -24,11 +24,28 @@ Do not modify source code.
 DEFAULT_MAX_TOKENS = 4096
 
 
+def env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}")
+    return value
+
+
+def max_tokens() -> int:
+    return env_positive_int("PLANNER_MAX_TOKENS", DEFAULT_MAX_TOKENS)
+
+
 def build_planner(stream_to_stdout: bool = True) -> Agent:
     model = BedrockModel(
         model_id=os.environ["BEDROCK_MODEL_ID"],
         region_name=os.environ.get("AWS_REGION", "us-east-1"),
-        max_tokens=int(os.environ.get("PLANNER_MAX_TOKENS", DEFAULT_MAX_TOKENS)),
+        max_tokens=max_tokens(),
     )
     kwargs = {} if stream_to_stdout else {"callback_handler": None}
     return Agent(model=model, system_prompt=SYSTEM_PROMPT, **kwargs)
