@@ -212,7 +212,10 @@ def worker(event, context):
 
     repo = repo_for_team((issue.get("team") or {}).get("key"))
     result = run_planner(format_ticket(issue), repo)
-    planned = "plan" in result
+    # Never post a header with no plan under it.
+    planned = bool(str(result.get("plan") or "").strip())
+    if "plan" in result and not planned:
+        result = {"error": "Planner returned an empty plan", "details": "Relabel the ticket to try again."}
     body = f"{PLAN_HEADER}\n\n{result['plan']}" if planned else error_comment(result)
     if not planned:
         logger.error("Planner returned an error for %s: %s", issue["identifier"], result)

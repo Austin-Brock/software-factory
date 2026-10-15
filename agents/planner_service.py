@@ -69,6 +69,8 @@ def invoke(payload: dict):
             "Raise PLANNER_MAX_TOKENS or split the ticket.",
             422,
         )
+    except planner.EmptyPlanError:
+        return error("Planner returned an empty plan", "Relabel the ticket to try again.", 502)
     except (repo_tools.RepoError, OSError) as exc:
         return error("Could not read the repository", str(exc) or type(exc).__name__, 502)
     except ModelThrottledException:

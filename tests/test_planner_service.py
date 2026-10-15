@@ -64,6 +64,16 @@ def test_repo_download_failure_returns_502(client, monkeypatch):
     assert response.json()["details"] == "too large"
 
 
+def test_empty_plan_returns_clear_error(client, monkeypatch):
+    def plan_ticket(ticket, repo=None):
+        raise planner.EmptyPlanError("empty")
+
+    monkeypatch.setattr(planner, "plan_ticket", plan_ticket)
+    response = client.post("/invocations", json={"ticket": "x"})
+    assert response.status_code == 502
+    assert response.json()["error"] == "Planner returned an empty plan"
+
+
 def test_ticket_whitespace_is_trimmed(client, fake_plan):
     client.post("/invocations", json={"ticket": "  Add dark mode \n"})
     assert fake_plan == ["Add dark mode"]

@@ -36,6 +36,18 @@ so read what matters most first.
 
 # Caps output per plan so a single request can't run up the Bedrock bill.
 DEFAULT_MAX_TOKENS = 4096
+# gpt-oss sometimes ends a turn with reasoning only (no text, no tool call).
+# Nudging it to continue keeps its context; after this many tries we give up.
+MAX_NUDGES = 3
+NUDGE = (
+    "You stopped without any output. Pick up where you left off: if you still "
+    "need to inspect files, call a tool; once you have what you need, write "
+    "the complete implementation plan."
+)
+
+
+class EmptyPlanError(RuntimeError):
+    pass
 
 
 def env_positive_int(name: str, default: int) -> int:
@@ -66,6 +78,17 @@ def build_planner(stream_to_stdout: bool = True, tools: list | None = None) -> A
     return Agent(model=model, system_prompt=prompt, tools=tools or [], **kwargs)
 
 
+def run_until_text(agent: Agent, ticket: str) -> str:
+    text = str(agent(ticket)).strip()
+    for _ in range(MAX_NUDGES):
+        if text:
+            return text
+        text = str(agent(NUDGE)).strip()
+    if not text:
+        raise EmptyPlanError(f"Model returned no plan after {MAX_NUDGES} nudges")
+    return text
+
+
 def files_examined_footer(files: list[str]) -> str:
     if not files:
         return "\n\n---\n_Files examined: none_"
@@ -80,11 +103,11 @@ def plan_ticket(ticket: str, repo: str | None = None) -> str:
     With a repo, the planner explores a read-only snapshot of it first.
     """
     if not repo:
-        return str(build_planner(stream_to_stdout=False)(ticket))
+        return run_until_text(build_planner(stream_to_stdout=False), ticket)
     with repo_tools.snapshot(repo) as root:
         budget = repo_tools.ToolBudget()
         tools = repo_tools.make_tools(root, budget)
-        plan = str(build_planner(stream_to_stdout=False, tools=tools)(ticket))
+        plan = run_until_text(build_planner(stream_to_stdout=False, tools=tools), ticket)
     return plan + files_examined_footer(budget.files_read)
 
 

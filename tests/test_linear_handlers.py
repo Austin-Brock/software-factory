@@ -277,3 +277,10 @@ def test_worker_plans_against_the_teams_repo(aws, monkeypatch):
 def test_worker_plans_without_repo_for_unmapped_team(aws, monkeypatch):
     worker_with(aws, monkeypatch, team="OPS")
     assert aws.repos == [None]
+
+
+def test_worker_never_posts_blank_plan(aws, monkeypatch):
+    aws.planner_result = {"plan": "   "}
+    result, linear = worker_with(aws, monkeypatch)
+    assert result == {"failed": "FAC-1"}
+    assert "empty plan" in linear.comments[0]
