@@ -6,6 +6,8 @@
     "plannerMaxTicketChars": "20000",
     "budgetName": "monthly-account-cap",
     "linearTriggerLabel": "factory:plan",
+    "githubAppId": "5332222",
+    "githubInstallationId": "171758831",
     "linearTeamRepos": {
       "FAC": "Austin-Brock/factory-sandbox"
     }
