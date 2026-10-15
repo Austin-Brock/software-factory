@@ -1,0 +1,9 @@
+{
+  "app": ".venv/bin/python app.py",
+  "context": {
+    "bedrockModelId": "openai.gpt-oss-120b-1:0",
+    "plannerMaxTokens": "4096",
+    "plannerMaxTicketChars": "20000",
+    "budgetName": "monthly-account-cap"
+  }
+}

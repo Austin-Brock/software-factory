@@ -20,13 +20,45 @@ For every ticket, provide:
 Do not modify source code.
 """
 
+# Caps output per plan so a single request can't run up the Bedrock bill.
+DEFAULT_MAX_TOKENS = 4096
 
-def build_planner() -> Agent:
+
+def env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}")
+    return value
+
+
+def max_tokens() -> int:
+    return env_positive_int("PLANNER_MAX_TOKENS", DEFAULT_MAX_TOKENS)
+
+
+def build_planner(stream_to_stdout: bool = True) -> Agent:
     model = BedrockModel(
         model_id=os.environ["BEDROCK_MODEL_ID"],
         region_name=os.environ.get("AWS_REGION", "us-east-1"),
+        max_tokens=max_tokens(),
     )
-    return Agent(model=model, system_prompt=SYSTEM_PROMPT)
+    kwargs = {} if stream_to_stdout else {"callback_handler": None}
+    return Agent(model=model, system_prompt=SYSTEM_PROMPT, **kwargs)
+
+
+def plan_ticket(ticket: str) -> str:
+    """Produce a plan for one ticket using a fresh agent.
+
+    Agents keep conversation history, so reusing one across tickets would
+    leak earlier tickets into later plans and grow the cost of every call.
+    """
+    planner = build_planner(stream_to_stdout=False)
+    return str(planner(ticket))
 
 
 if __name__ == "__main__":

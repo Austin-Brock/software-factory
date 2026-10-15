@@ -1,0 +1,16 @@
+# Only requirements.txt and agents/ are copied; keep everything else,
+# especially secrets, out of the build context.
+.env
+.env.*
+.venv/
+.git/
+.github/
+.pytest_cache/
+__pycache__/
+**/__pycache__/
+*.pyc
+tests/
+workspace/
+infrastructure/
+cdk.out/
+README.md

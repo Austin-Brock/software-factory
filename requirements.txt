@@ -1,6 +1,7 @@
 annotated-types==0.8.0
 anyio==4.15.1
 attrs==26.1.0
+bedrock-agentcore==1.24.1
 boto3==1.43.114
 botocore==1.43.114
 certifi==2026.7.22
@@ -14,7 +15,6 @@ httpcore2==2.13.1
 httpx==0.28.1
 httpx2==2.13.1
 idna==3.20
-iniconfig==2.3.1
 jmespath==1.1.0
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
@@ -26,13 +26,10 @@ opentelemetry-instrumentation-threading==0.66b1
 opentelemetry-sdk==1.45.1
 opentelemetry-semantic-conventions==0.66b1
 packaging==26.3
-pluggy==1.7.0
 pycparser==3.11
 pydantic==2.14.1
 pydantic_core==2.50.1
-Pygments==2.21.0
 PyJWT==2.15.1
-pytest==9.1.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.4
 python-multipart==0.0.32
@@ -50,4 +47,5 @@ typing_extensions==4.16.0
 urllib3==2.8.0
 uvicorn==0.54.0
 watchdog==6.0.0
+websockets==17.2
 wrapt==2.5.1
