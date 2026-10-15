@@ -17,6 +17,8 @@ def synth(model_id="openai.gpt-oss-120b-1:0") -> Template:
         budget_alert_email="alerts@example.com",
         linear_trigger_label="factory:plan",
         linear_team_repos={"FAC": "Austin-Brock/factory-sandbox"},
+        github_app_id="111",
+        github_installation_id="222",
         env=cdk.Environment(account="111111111111", region="us-east-1"),
     )
     return Template.from_stack(stack)
@@ -28,6 +30,7 @@ def template():
 
 
 def test_runtime_avoids_always_on_costs(template):
+    template.resource_count_is("AWS::BedrockAgentCore::Runtime", 2)
     template.has_resource_properties(
         "AWS::BedrockAgentCore::Runtime",
         {
@@ -135,7 +138,9 @@ def test_budget_kill_switch_denies_bedrock_at_100_percent(template):
                 "IamActionDefinition": {
                     "Roles": [
                         {"Ref": Match.string_like_regexp("PlannerRuntimeExecutionRole")},
+                        {"Ref": Match.string_like_regexp("BuilderRuntimeExecutionRole")},
                         {"Ref": Match.string_like_regexp("LinearWorkerServiceRole")},
+                        {"Ref": Match.string_like_regexp("LinearBuildWorkerServiceRole")},
                     ]
                 }
             },
@@ -156,7 +161,9 @@ def test_budgets_role_can_only_attach_kill_switch_to_agent_roles(template):
                         "Action": ["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
                         "Resource": [
                             {"Fn::GetAtt": [Match.string_like_regexp("PlannerRuntimeExecutionRole"), "Arn"]},
+                            {"Fn::GetAtt": [Match.string_like_regexp("BuilderRuntimeExecutionRole"), "Arn"]},
                             {"Fn::GetAtt": [Match.string_like_regexp("LinearWorkerServiceRole"), "Arn"]},
+                            {"Fn::GetAtt": [Match.string_like_regexp("LinearBuildWorkerServiceRole"), "Arn"]},
                         ],
                         "Condition": {
                             "ArnEquals": {
@@ -176,7 +183,7 @@ def test_webhook_receiver_is_public_and_fast(template):
     template.has_resource_properties("AWS::Lambda::Url", {"AuthType": "NONE"})
     template.has_resource_properties(
         "AWS::Lambda::Function",
-        {"Handler": "linear.handlers.receiver", "Timeout": 5, "Architectures": ["arm64"]},
+        {"Handler": "integrations.linear.handlers.receiver", "Timeout": 5, "Architectures": ["arm64"]},
     )
 
 
@@ -187,7 +194,7 @@ def test_worker_never_retries(template):
     template.has_resource_properties(
         "AWS::Lambda::Function",
         {
-            "Handler": "linear.handlers.worker",
+            "Handler": "integrations.linear.handlers.worker",
             "Timeout": 600,
             "Environment": {
                 "Variables": Match.object_like(
@@ -251,4 +258,37 @@ def test_receiver_can_record_and_release_deliveries(template):
                 )
             },
         },
+    )
+
+
+def test_only_the_build_worker_can_read_the_github_key(template):
+    key_arn = "arn:aws:ssm:us-east-1:111111111111:parameter/software-factory/github/app-private-key"
+    readers = [
+        policy["Properties"]["Roles"][0]["Ref"]
+        for policy in template.find_resources("AWS::IAM::Policy").values()
+        if key_arn in str(policy["Properties"]["PolicyDocument"])
+    ]
+    assert len(readers) == 1 and readers[0].startswith("LinearBuildWorkerServiceRole")
+
+
+def test_build_worker_runs_up_to_15_minutes_without_retries(template):
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
+            "Handler": "integrations.linear.handlers.build_worker",
+            "Timeout": 900,
+            "Environment": {
+                "Variables": Match.object_like({"GITHUB_APP_ID": "111", "GITHUB_INSTALLATION_ID": "222"})
+            },
+        },
+    )
+    configs = template.find_resources("AWS::Lambda::EventInvokeConfig")
+    assert len(configs) == 2
+    assert all(c["Properties"]["MaximumRetryAttempts"] == 0 for c in configs.values())
+
+
+def test_builder_runtime_uses_node_image(template):
+    template.has_resource_properties(
+        "AWS::BedrockAgentCore::Runtime",
+        {"AgentRuntimeName": "software_factory_builder", "NetworkConfiguration": {"NetworkMode": "PUBLIC"}},
     )

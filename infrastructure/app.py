@@ -39,6 +39,8 @@ PlannerStack(
     budget_alert_email=budget_alert_email,
     linear_trigger_label=app.node.get_context("linearTriggerLabel"),
     linear_team_repos=team_repos_context(),
+    github_app_id=str(app.node.get_context("githubAppId")),
+    github_installation_id=str(app.node.get_context("githubInstallationId")),
     env=cdk.Environment(region="us-east-1"),
 )
 

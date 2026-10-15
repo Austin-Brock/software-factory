@@ -290,3 +290,158 @@ def test_worker_never_posts_blank_plan(aws, monkeypatch):
 def test_malformed_team_repos_falls_back_to_no_repo(monkeypatch, raw):
     monkeypatch.setenv("TEAM_REPOS", raw)
     assert handlers.repo_for_team("FAC") is None
+
+
+BUILD_EVENT = {
+    "issueId": "issue-1",
+    "identifier": "FAC-1",
+    "title": "Add dark mode",
+    "url": "https://linear.app/x/issue/FAC-1",
+    "ticket": "Linear issue FAC-1: Add dark mode",
+    "plan": "1. Objective",
+    "repo": "Austin-Brock/factory-sandbox",
+}
+
+BUILD_RESULT = {
+    "baseSha": "a" * 40,
+    "summary": "Added a toggle.",
+    "changes": {"src/App.tsx": "new"},
+    "checks": {"install": {"passed": True, "output": ""}, "test": {"passed": True, "output": ""}},
+    "passed": True,
+}
+
+
+@pytest.fixture
+def github(monkeypatch):
+    opened = []
+
+    class FakeApp:
+        def __init__(self, *args):
+            pass
+
+        def installation_token(self, repo):
+            return "tok"
+
+    def fake_open(token, repo, **kwargs):
+        opened.append(kwargs)
+        return {"number": 4, "url": "https://github.com/x/pull/4", "branch": kwargs["branch"]}
+
+    monkeypatch.setattr(handlers, "GitHubApp", FakeApp)
+    monkeypatch.setattr(handlers, "open_pull_request", fake_open)
+    for name, value in {
+        "BUILDER_RUNTIME_ARN": "arn:builder",
+        "GITHUB_APP_ID": "1",
+        "GITHUB_INSTALLATION_ID": "2",
+        "GITHUB_APP_KEY_PARAM": "/sf/gh",
+    }.items():
+        monkeypatch.setenv(name, value)
+    return opened
+
+
+def build(aws, monkeypatch, result=BUILD_RESULT):
+    aws.planner_result = result
+    linear = FakeLinear({})
+    monkeypatch.setattr(handlers, "LinearClient", linear)
+    return handlers.build_worker(dict(BUILD_EVENT), None), linear
+
+
+def test_plan_triggers_build_automatically(aws, monkeypatch):
+    monkeypatch.setenv("BUILD_FUNCTION", "build")
+    worker_with(aws, monkeypatch)
+    assert aws.invocations[-1]["identifier"] == "FAC-1"
+    assert aws.invocations[-1]["repo"] == "Austin-Brock/factory-sandbox"
+    assert aws.invocations[-1]["plan"] == "1. Objective ..."
+
+
+def test_no_build_without_a_repo(aws, monkeypatch):
+    monkeypatch.setenv("BUILD_FUNCTION", "build")
+    worker_with(aws, monkeypatch, team="OPS")
+    assert aws.invocations == []
+
+
+def test_successful_build_opens_ready_pr(aws, monkeypatch, github):
+    result, linear = build(aws, monkeypatch)
+    assert result == {"pr": 4}
+    pr = github[0]
+    assert pr["draft"] is False
+    assert pr["base_sha"] == "a" * 40
+    assert pr["branch"] == "factory/fac-1-add-dark-mode"
+    assert "A human must review and merge" in pr["body"]
+    assert "Pull request opened" in linear.comments[0] and "all checks passed" in linear.comments[0]
+
+
+def test_failing_checks_open_a_draft(aws, monkeypatch, github):
+    failing = {**BUILD_RESULT, "passed": False, "checks": {"test": {"passed": False, "output": "1 failed"}}}
+    _, linear = build(aws, monkeypatch, failing)
+    assert github[0]["draft"] is True
+    assert "1 failed" in github[0]["body"]
+    assert "opened as draft" in linear.comments[0]
+
+
+def test_forbidden_change_is_never_committed(aws, monkeypatch, github):
+    evil = {**BUILD_RESULT, "changes": {".github/workflows/ci.yml": "steal secrets"}}
+    result, linear = build(aws, monkeypatch, evil)
+    assert result == {"rejected": "FAC-1"}
+    assert github == []
+    assert "Protected path" in linear.comments[0]
+
+
+def test_builder_error_is_reported(aws, monkeypatch, github):
+    result, linear = build(aws, monkeypatch, {"error": "Builder exceeded its tool budget", "details": "Split it"})
+    assert result == {"failed": "FAC-1"}
+    assert github == []
+    assert "could not build this" in linear.comments[0]
+
+
+def test_github_failure_is_reported(aws, monkeypatch, github):
+    def broken(*args, **kwargs):
+        raise handlers.GitHubError(403, "Resource not accessible by integration")
+
+    monkeypatch.setattr(handlers, "open_pull_request", broken)
+    result, linear = build(aws, monkeypatch)
+    assert result == {"failed": "FAC-1"}
+    assert "Resource not accessible" in linear.comments[0]
+
+
+@pytest.mark.parametrize(
+    ("title", "branch"),
+    [("Add dark mode!", "factory/fac-1-add-dark-mode"), ("???", "factory/fac-1")],
+)
+def test_branch_names_are_safe(title, branch):
+    assert handlers.branch_name("FAC-1", title) == branch
+
+
+def test_leaked_tool_text_in_summary_blocks_the_pr(aws, monkeypatch, github):
+    leaked = {**BUILD_RESULT, "summary": "<analysis>Now CSS.</analysis to=functions.edit_file code<|message|>{}"}
+    result, linear = build(aws, monkeypatch, leaked)
+    assert result == {"rejected": "FAC-1"}
+    assert github == []
+    assert "did not finish cleanly" in linear.comments[0]
+
+
+def test_huge_pr_body_is_capped(aws, monkeypatch, github):
+    event = dict(BUILD_EVENT, plan="p" * 50_000)
+    failing = {**BUILD_RESULT, "passed": False, "summary": "s" * 30_000,
+               "checks": {n: {"passed": False, "output": "o" * 5_000} for n in ("lint", "test", "build")}}
+    body = handlers.pr_body(event, failing)
+    assert len(body) <= handlers.MAX_PR_BODY_CHARS
+    assert body.endswith("A human must review and merge this PR.")
+
+
+def test_build_handoff_failure_is_reported(aws, monkeypatch):
+    monkeypatch.setenv("BUILD_FUNCTION", "build")
+    aws.invoke_error = ClientError({"Error": {"Code": "AccessDeniedException"}}, "Invoke")
+    result, linear = worker_with(aws, monkeypatch)
+    assert result == {"planned": "FAC-1"}
+    assert "build could not start" in linear.comments[-1]
+
+
+def test_worker_and_builder_rules_stay_in_sync():
+    from agents import builder_tools
+    from integrations.github import rules
+
+    assert rules.FORBIDDEN_PREFIXES == builder_tools.FORBIDDEN_PREFIXES
+    assert rules.FORBIDDEN_NAMES == builder_tools.FORBIDDEN_NAMES
+    assert rules.MAX_CHANGED_FILES == builder_tools.MAX_CHANGED_FILES
+    assert rules.MAX_CHANGE_BYTES == builder_tools.MAX_CHANGE_BYTES
+    assert handlers.LEAKED_TOOL_TEXT.pattern == builder_tools.HARMONY_MARKERS.pattern
