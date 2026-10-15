@@ -9,6 +9,7 @@ import os
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from pydantic import BaseModel, Field, ValidationError
 from starlette.responses import JSONResponse
+from strands.types.exceptions import MaxTokensReachedException
 
 from agents import planner
 
@@ -36,7 +37,17 @@ def invoke(payload: dict):
             {"error": "Invalid request", "details": "ticket is blank"},
             status_code=400,
         )
-    return {"plan": planner.plan_ticket(request.ticket)}
+    try:
+        plan = planner.plan_ticket(request.ticket)
+    except MaxTokensReachedException:
+        return JSONResponse(
+            {
+                "error": "Plan exceeded the output token cap",
+                "details": "Raise PLANNER_MAX_TOKENS or split the ticket.",
+            },
+            status_code=422,
+        )
+    return {"plan": plan}
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import pytest
 from starlette.testclient import TestClient
+from strands.types.exceptions import MaxTokensReachedException
 
 from agents import planner, planner_service
 
@@ -48,6 +49,16 @@ def test_invalid_payload_is_rejected_without_calling_model(client, fake_plan, pa
     response = client.post("/invocations", json=payload)
     assert response.status_code == 400
     assert fake_plan == []
+
+
+def test_token_cap_returns_clear_error(client, monkeypatch):
+    def plan_ticket(ticket):
+        raise MaxTokensReachedException("cap hit")
+
+    monkeypatch.setattr(planner, "plan_ticket", plan_ticket)
+    response = client.post("/invocations", json={"ticket": "Huge ticket"})
+    assert response.status_code == 422
+    assert "PLANNER_MAX_TOKENS" in response.json()["details"]
 
 
 def test_each_ticket_gets_a_fresh_agent(monkeypatch):
